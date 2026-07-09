@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, use } from 'react';
 import ForceGraphVisualization from '@/components/ForceGraph';
 import GraphControls from '@/components/GraphControls';
+import type { GraphFilters } from '@/components/GraphControls';
 import type { GraphData, ForceGraphNode } from '@/lib/types';
 
 export default function RepoGraphPage({ params }: { params: Promise<{ repo: string }> }) {
@@ -11,11 +12,13 @@ export default function RepoGraphPage({ params }: { params: Promise<{ repo: stri
   const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<GraphFilters>({
     nodeTypes: new Set(['repository', 'branch', 'commit', 'pullRequest', 'user']),
     repos: new Set<string>(),
     users: new Set<string>(),
+    contributors: new Set(['bot', 'human']),
   });
+  const [visibleCounts, setVisibleCounts] = useState({ nodes: 0, edges: 0 });
   const [selectedNode, setSelectedNode] = useState<ForceGraphNode | null>(null);
 
   useEffect(() => {
@@ -49,6 +52,10 @@ export default function RepoGraphPage({ params }: { params: Promise<{ repo: stri
 
   const handleNodeClick = useCallback((node: ForceGraphNode) => {
     setSelectedNode(node);
+  }, []);
+
+  const handleVisibleCountChange = useCallback((nodes: number, edges: number) => {
+    setVisibleCounts({ nodes, edges });
   }, []);
 
   if (loading) {
@@ -92,11 +99,17 @@ export default function RepoGraphPage({ params }: { params: Promise<{ repo: stri
         width={dimensions.width}
         height={dimensions.height}
         onNodeClick={handleNodeClick}
+        onVisibleCountChange={handleVisibleCountChange}
         filters={filters}
       />
 
       {/* Controls */}
-      <GraphControls data={data} onFilterChange={setFilters} />
+      <GraphControls
+        data={data}
+        visibleNodeCount={visibleCounts.nodes}
+        visibleEdgeCount={visibleCounts.edges}
+        onFilterChange={setFilters}
+      />
 
       {/* Selected Node Panel */}
       {selectedNode && (

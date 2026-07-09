@@ -9,6 +9,7 @@ interface GraphNode {
   type: 'repository' | 'branch' | 'commit' | 'pullRequest' | 'user';
   label: string;
   metadata: Record<string, unknown>;
+  contributorType?: 'bot' | 'human' | null;
 }
 
 interface GraphEdge {
@@ -98,11 +99,15 @@ export async function GET(request: NextRequest) {
           isBot: user.is_bot,
           name: user.name,
         },
+        contributorType: user.is_bot ? 'bot' : 'human',
       });
       nodeIds.add(nodeId);
     }
 
     const userIds = usersQuery.map(u => u.id);
+    const contributorTypeByUserId = new Map<string, 'bot' | 'human'>(
+      usersQuery.map(user => [String(user.id), user.is_bot ? 'bot' : 'human'])
+    );
 
     // Fetch branches (limit to repos in scope)
     const branchesQuery = await sql`
@@ -165,6 +170,7 @@ export async function GET(request: NextRequest) {
           authorName: commit.author_name,
           committedAt: commit.committed_at,
         },
+        contributorType: commit.user_id ? contributorTypeByUserId.get(String(commit.user_id)) ?? null : null,
       });
       nodeIds.add(nodeId);
 
@@ -219,6 +225,7 @@ export async function GET(request: NextRequest) {
           createdAt: pr.created_at,
           mergedAt: pr.merged_at,
         },
+        contributorType: pr.author_id ? contributorTypeByUserId.get(String(pr.author_id)) ?? null : null,
       });
       nodeIds.add(nodeId);
 

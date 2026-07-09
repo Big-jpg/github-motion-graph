@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import ForceGraphVisualization from '@/components/ForceGraph';
 import GraphControls from '@/components/GraphControls';
+import type { GraphFilters } from '@/components/GraphControls';
 import type { GraphData, ForceGraphNode } from '@/lib/types';
 import { useMockData } from '@/lib/mock-data';
 
@@ -12,11 +13,13 @@ export default function GraphPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<GraphFilters>({
     nodeTypes: new Set(['repository', 'branch', 'commit', 'pullRequest', 'user']),
     repos: new Set<string>(),
     users: new Set<string>(),
+    contributors: new Set(['bot', 'human']),
   });
+  const [visibleCounts, setVisibleCounts] = useState({ nodes: 0, edges: 0 });
   const [selectedNode, setSelectedNode] = useState<ForceGraphNode | null>(null);
 
   const mockData = useMockData();
@@ -59,6 +62,10 @@ export default function GraphPage() {
     setSelectedNode(node);
   }, []);
 
+  const handleVisibleCountChange = useCallback((nodes: number, edges: number) => {
+    setVisibleCounts({ nodes, edges });
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -97,11 +104,17 @@ export default function GraphPage() {
         width={dimensions.width}
         height={dimensions.height}
         onNodeClick={handleNodeClick}
+        onVisibleCountChange={handleVisibleCountChange}
         filters={filters}
       />
 
       {/* Controls */}
-      <GraphControls data={data} onFilterChange={setFilters} />
+      <GraphControls
+        data={data}
+        visibleNodeCount={visibleCounts.nodes}
+        visibleEdgeCount={visibleCounts.edges}
+        onFilterChange={setFilters}
+      />
 
       {/* Selected Node Panel */}
       {selectedNode && (
