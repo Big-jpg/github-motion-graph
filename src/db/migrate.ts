@@ -192,6 +192,113 @@ export async function createTables() {
     END $$;
   `;
 
+  await sql`
+    DO $$
+    DECLARE
+      column_record RECORD;
+      expected_columns TEXT[];
+      table_record RECORD;
+    BEGIN
+      FOR table_record IN
+        SELECT *
+        FROM (
+          VALUES
+            ('repositories', ARRAY[
+              'id',
+              'node_id',
+              'name',
+              'full_name',
+              'description',
+              'url',
+              'default_branch',
+              'created_at',
+              'updated_at',
+              'pushed_at',
+              'stargazer_count',
+              'language'
+            ]::TEXT[]),
+            ('branches', ARRAY[
+              'id',
+              'name',
+              'repository_id',
+              'is_default',
+              'created_at'
+            ]::TEXT[]),
+            ('users', ARRAY[
+              'id',
+              'login',
+              'avatar_url',
+              'is_bot',
+              'name'
+            ]::TEXT[]),
+            ('commits', ARRAY[
+              'id',
+              'sha',
+              'message',
+              'author_name',
+              'author_email',
+              'committed_at',
+              'repository_id',
+              'branch_id',
+              'user_id'
+            ]::TEXT[]),
+            ('pull_requests', ARRAY[
+              'id',
+              'node_id',
+              'number',
+              'title',
+              'state',
+              'created_at',
+              'merged_at',
+              'closed_at',
+              'additions',
+              'deletions',
+              'head_branch',
+              'base_branch',
+              'repository_id',
+              'author_id'
+            ]::TEXT[]),
+            ('merge_events', ARRAY[
+              'id',
+              'pr_id',
+              'merged_by_id',
+              'merged_at',
+              'repository_id'
+            ]::TEXT[]),
+            ('commit_pull_requests', ARRAY[
+              'id',
+              'commit_id',
+              'pull_request_id'
+            ]::TEXT[])
+        ) AS table_columns(table_name, columns)
+      LOOP
+        expected_columns := table_record.columns;
+        FOR column_record IN
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = table_record.table_name
+            AND is_nullable = 'NO'
+            AND column_name <> ALL(expected_columns)
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE %I ALTER COLUMN %I DROP NOT NULL',
+            table_record.table_name,
+            column_record.column_name
+          );
+        END LOOP;
+      END LOOP;
+
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'repositories' AND column_name = 'github_id'
+      ) THEN
+        EXECUTE 'UPDATE repositories SET github_id = node_id WHERE github_id IS NULL AND node_id IS NOT NULL';
+      END IF;
+    END $$;
+  `;
+
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_node_id_unique ON repositories(node_id)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_full_name_unique ON repositories(full_name)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS users_login_unique ON users(login)`;
