@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 import { eq } from 'drizzle-orm';
+import { timingSafeEqual } from 'node:crypto';
 import * as schema from '@/db/schema';
 import {
   githubGraphQL,
@@ -26,6 +27,32 @@ function isBot(name: string | null | undefined): boolean {
   return lower.includes('manus') || lower.includes('[bot]') || lower.includes('dependabot') || lower.includes('github-actions');
 }
 
+function getSubmittedIngestSecret(request: NextRequest): string | null {
+  const authorization = request.headers.get('authorization');
+  const bearerMatch = authorization?.match(/^Bearer\s+(.+)$/i);
+  return bearerMatch?.[1] || request.headers.get('x-ingest-secret');
+}
+
+function secretMatches(expected: string, submitted: string): boolean {
+  const expectedBuffer = Buffer.from(expected);
+  const submittedBuffer = Buffer.from(submitted);
+  return expectedBuffer.length === submittedBuffer.length && timingSafeEqual(expectedBuffer, submittedBuffer);
+}
+
+function verifyIngestSecret(request: NextRequest): NextResponse | null {
+  const expected = process.env.INGEST_SECRET;
+  if (!expected) {
+    return NextResponse.json({ error: 'INGEST_SECRET is not configured' }, { status: 500 });
+  }
+
+  const submitted = getSubmittedIngestSecret(request);
+  if (!submitted || !secretMatches(expected, submitted)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return null;
+}
+
 async function getOrCreateUser(db: ReturnType<typeof drizzle>, login: string, avatarUrl?: string, name?: string | null) {
   const existing = await db.select().from(schema.users).where(eq(schema.users.login, login)).limit(1);
   if (existing.length > 0) {
@@ -45,6 +72,9 @@ async function getOrCreateUser(db: ReturnType<typeof drizzle>, login: string, av
 
 export async function POST(request: NextRequest) {
   try {
+    const authError = verifyIngestSecret(request);
+    if (authError) return authError;
+
     const body = await request.json();
     const username = body.username as string;
     if (!username) {

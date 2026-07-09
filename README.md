@@ -49,7 +49,7 @@ Edges: AUTHORED, OPENED, MERGED, BELONGS_TO, TARGETS, FROM, PART_OF
 ```bash
 pnpm install
 cp .env.example .env.local
-# Fill in DATABASE_URL and GH_TOKEN
+# Fill in DATABASE_URL, GH_TOKEN, and INGEST_SECRET
 pnpm dev
 ```
 
@@ -58,6 +58,7 @@ pnpm dev
 ```bash
 curl -X POST http://localhost:3000/api/ingest \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $INGEST_SECRET" \
   -d '{"username": "Big-jpg"}'
 ```
 
@@ -67,6 +68,7 @@ curl -X POST http://localhost:3000/api/ingest \
 |----------|-------------|
 | `DATABASE_URL` | Neon Postgres connection string |
 | `GH_TOKEN` | GitHub Personal Access Token |
+| `INGEST_SECRET` | Shared secret required for `POST /api/ingest` |
 | `NEXT_PUBLIC_APP_URL` | Application URL |
 
 ## Deploy
