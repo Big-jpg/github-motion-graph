@@ -288,14 +288,6 @@ export async function createTables() {
           );
         END LOOP;
       END LOOP;
-
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'repositories' AND column_name = 'github_id'
-      ) THEN
-        EXECUTE 'UPDATE repositories SET github_id = node_id WHERE github_id IS NULL AND node_id IS NOT NULL';
-      END IF;
     END $$;
   `;
 
