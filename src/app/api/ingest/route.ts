@@ -83,14 +83,19 @@ async function getOrCreateUser(db: ReturnType<typeof drizzle>, login: string, av
   if (existing.length > 0) {
     return existing[0].id;
   }
+  const isBotUser = isBot(login) || isBot(name);
   const result = await db.insert(schema.users).values({
     login,
     avatarUrl: avatarUrl || null,
-    isBot: isBot(login) || isBot(name),
+    isBot: isBotUser,
     name: name || null,
   }).onConflictDoUpdate({
     target: schema.users.login,
-    set: { avatarUrl: avatarUrl || undefined },
+    set: {
+      avatarUrl: avatarUrl || null,
+      isBot: isBotUser,
+      name: name || null,
+    },
   }).returning({ id: schema.users.id });
   return result[0].id;
 }
