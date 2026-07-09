@@ -53,6 +53,31 @@ function verifyIngestSecret(request: NextRequest): NextResponse | null {
   return null;
 }
 
+function serializeError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return { error: 'Unknown error' };
+  }
+
+  const maybeDetailedError = error as Error & {
+    cause?: unknown;
+    code?: string;
+    detail?: string;
+    hint?: string;
+  };
+  const cause =
+    maybeDetailedError.cause && typeof maybeDetailedError.cause === 'object'
+      ? (maybeDetailedError.cause as { message?: string; code?: string; detail?: string; hint?: string })
+      : null;
+
+  return {
+    error: maybeDetailedError.message,
+    code: maybeDetailedError.code || cause?.code,
+    detail: maybeDetailedError.detail || cause?.detail,
+    hint: maybeDetailedError.hint || cause?.hint,
+    cause: cause?.message,
+  };
+}
+
 async function getOrCreateUser(db: ReturnType<typeof drizzle>, login: string, avatarUrl?: string, name?: string | null) {
   const existing = await db.select().from(schema.users).where(eq(schema.users.login, login)).limit(1);
   if (existing.length > 0) {
@@ -273,9 +298,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Ingestion error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
+    return NextResponse.json(serializeError(error), { status: 500 });
   }
 }

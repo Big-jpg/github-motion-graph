@@ -95,6 +95,37 @@ export async function createTables() {
 
   // Repair older partially-created tables. CREATE TABLE IF NOT EXISTS will not
   // add columns when a table already exists with an earlier shape.
+  await sql`
+    DO $$
+    DECLARE
+      table_name TEXT;
+      sequence_name TEXT;
+    BEGIN
+      FOREACH table_name IN ARRAY ARRAY[
+        'repositories',
+        'branches',
+        'users',
+        'commits',
+        'pull_requests',
+        'merge_events',
+        'commit_pull_requests'
+      ]
+      LOOP
+        sequence_name := table_name || '_id_seq';
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS id INTEGER', table_name);
+        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %I', sequence_name);
+        EXECUTE format('ALTER SEQUENCE %I OWNED BY %I.id', sequence_name, table_name);
+        EXECUTE format('UPDATE %I SET id = nextval(%L) WHERE id IS NULL', table_name, sequence_name);
+        EXECUTE format(
+          'SELECT setval(%L, GREATEST(COALESCE((SELECT MAX(id) FROM %I), 0), 1), true)',
+          sequence_name,
+          table_name
+        );
+        EXECUTE format('ALTER TABLE %I ALTER COLUMN id SET DEFAULT nextval(%L)', table_name, sequence_name);
+      END LOOP;
+    END $$;
+  `;
+
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS node_id TEXT`;
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS name TEXT`;
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS full_name TEXT`;
