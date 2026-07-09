@@ -93,6 +93,80 @@ export async function createTables() {
     )
   `;
 
+  // Repair older partially-created tables. CREATE TABLE IF NOT EXISTS will not
+  // add columns when a table already exists with an earlier shape.
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS node_id TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS name TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS full_name TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS description TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS url TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS default_branch TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMP`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS stargazer_count INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS language TEXT`;
+
+  await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS name TEXT`;
+  await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
+  await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT FALSE`;
+  await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS created_at TIMESTAMP`;
+
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS login TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_bot BOOLEAN DEFAULT FALSE`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`;
+
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS sha TEXT`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS message TEXT`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS author_name TEXT`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS author_email TEXT`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS committed_at TIMESTAMP`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS branch_id INTEGER`;
+  await sql`ALTER TABLE commits ADD COLUMN IF NOT EXISTS user_id INTEGER`;
+
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS node_id TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS number INTEGER`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS title TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS state TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS created_at TIMESTAMP`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS merged_at TIMESTAMP`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS additions INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS deletions INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS head_branch TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS base_branch TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS author_id INTEGER`;
+
+  await sql`ALTER TABLE merge_events ADD COLUMN IF NOT EXISTS pr_id INTEGER`;
+  await sql`ALTER TABLE merge_events ADD COLUMN IF NOT EXISTS merged_by_id INTEGER`;
+  await sql`ALTER TABLE merge_events ADD COLUMN IF NOT EXISTS merged_at TIMESTAMP`;
+  await sql`ALTER TABLE merge_events ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
+
+  await sql`ALTER TABLE commit_pull_requests ADD COLUMN IF NOT EXISTS commit_id INTEGER`;
+  await sql`ALTER TABLE commit_pull_requests ADD COLUMN IF NOT EXISTS pull_request_id INTEGER`;
+
+  await sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'merge_events' AND column_name = 'pull_request_id'
+      ) THEN
+        EXECUTE 'UPDATE merge_events SET pr_id = pull_request_id WHERE pr_id IS NULL';
+      END IF;
+    END $$;
+  `;
+
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_node_id_unique ON repositories(node_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_full_name_unique ON repositories(full_name)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS users_login_unique ON users(login)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS commits_sha_unique ON commits(sha)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS pull_requests_node_id_unique ON pull_requests(node_id)`;
+
   // Create indexes
   await sql`CREATE INDEX IF NOT EXISTS idx_repo_full_name ON repositories(full_name)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_branch_repo ON branches(repository_id)`;
