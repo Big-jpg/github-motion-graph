@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { GraphData, ForceGraphNode, ForceGraphLink } from '@/lib/types';
+import type { GraphFilters } from './GraphControls';
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
 
@@ -41,14 +42,11 @@ interface ForceGraphProps {
   width: number;
   height: number;
   onNodeClick?: (node: ForceGraphNode) => void;
-  filters?: {
-    nodeTypes: Set<string>;
-    repos: Set<string>;
-    users: Set<string>;
-  };
+  onVisibleCountChange?: (nodes: number, edges: number) => void;
+  filters?: GraphFilters;
 }
 
-export default function ForceGraphVisualization({ data, width, height, onNodeClick, filters }: ForceGraphProps) {
+export default function ForceGraphVisualization({ data, width, height, onNodeClick, onVisibleCountChange, filters }: ForceGraphProps) {
   const fgRef = useRef<any>(null);
   const [hoveredNode, setHoveredNode] = useState<ForceGraphNode | null>(null);
   const [selectedNode, setSelectedNode] = useState<ForceGraphNode | null>(null);
@@ -58,9 +56,18 @@ export default function ForceGraphVisualization({ data, width, height, onNodeCli
 
     if (filters) {
       filteredNodes = data.nodes.filter(node => {
+        // Node type filter
         if (!filters.nodeTypes.has(node.type)) return false;
+
+        // Contributor type filter: applies to commits, PRs, and user nodes
+        if (node.contributorType) {
+          if (!filters.contributors.has(node.contributorType)) return false;
+        }
+
+        // Repo/user specific filters (if set)
         if (filters.repos.size > 0 && node.type === 'repository' && !filters.repos.has(node.label)) return false;
         if (filters.users.size > 0 && node.type === 'user' && !filters.users.has(node.label)) return false;
+
         return true;
       });
     }
@@ -84,6 +91,11 @@ export default function ForceGraphVisualization({ data, width, height, onNodeCli
 
     return { nodes, links };
   }, [data, filters]);
+
+  // Report visible counts back to parent
+  useEffect(() => {
+    onVisibleCountChange?.(graphData.nodes.length, graphData.links.length);
+  }, [graphData, onVisibleCountChange]);
 
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node);

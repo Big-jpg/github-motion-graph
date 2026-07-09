@@ -12,23 +12,42 @@ const NODE_TYPES = [
   { key: 'user', label: 'Users', color: '#10b981' },
 ];
 
-interface GraphControlsProps {
-  data: GraphData;
-  onFilterChange: (filters: {
-    nodeTypes: Set<string>;
-    repos: Set<string>;
-    users: Set<string>;
-  }) => void;
+const CONTRIBUTOR_TYPES = [
+  { key: 'bot', label: 'AI/Bot', color: '#ec4899' },
+  { key: 'human', label: 'Human', color: '#10b981' },
+];
+
+export interface GraphFilters {
+  nodeTypes: Set<string>;
+  repos: Set<string>;
+  users: Set<string>;
+  contributors: Set<string>; // 'bot' | 'human'
 }
 
-export default function GraphControls({ data, onFilterChange }: GraphControlsProps) {
+interface GraphControlsProps {
+  data: GraphData;
+  visibleNodeCount: number;
+  visibleEdgeCount: number;
+  onFilterChange: (filters: GraphFilters) => void;
+}
+
+export default function GraphControls({ data, visibleNodeCount, visibleEdgeCount, onFilterChange }: GraphControlsProps) {
   const [activeTypes, setActiveTypes] = useState<Set<string>>(
     new Set(NODE_TYPES.map(t => t.key))
   );
+  const [activeContributors, setActiveContributors] = useState<Set<string>>(
+    new Set(CONTRIBUTOR_TYPES.map(t => t.key))
+  );
   const [expanded, setExpanded] = useState(false);
 
-  const repos = [...new Set(data.nodes.filter(n => n.type === 'repository').map(n => n.label))];
-  const users = [...new Set(data.nodes.filter(n => n.type === 'user').map(n => n.label))];
+  const emitFilters = (types: Set<string>, contributors: Set<string>) => {
+    onFilterChange({
+      nodeTypes: types,
+      repos: new Set(),
+      users: new Set(),
+      contributors,
+    });
+  };
 
   const toggleType = (type: string) => {
     const next = new Set(activeTypes);
@@ -38,8 +57,23 @@ export default function GraphControls({ data, onFilterChange }: GraphControlsPro
       next.add(type);
     }
     setActiveTypes(next);
-    onFilterChange({ nodeTypes: next, repos: new Set(), users: new Set() });
+    emitFilters(next, activeContributors);
   };
+
+  const toggleContributor = (type: string) => {
+    const next = new Set(activeContributors);
+    if (next.has(type)) {
+      next.delete(type);
+    } else {
+      next.add(type);
+    }
+    setActiveContributors(next);
+    emitFilters(activeTypes, next);
+  };
+
+  // Count nodes by contributor type
+  const botNodeCount = data.nodes.filter(n => n.contributorType === 'bot').length;
+  const humanNodeCount = data.nodes.filter(n => n.contributorType === 'human').length;
 
   return (
     <div className="absolute bottom-4 left-4 z-10">
@@ -51,7 +85,7 @@ export default function GraphControls({ data, onFilterChange }: GraphControlsPro
       </button>
 
       {expanded && (
-        <div className="mt-2 bg-zinc-900/95 border border-zinc-700 rounded-lg p-4 backdrop-blur-sm min-w-[200px]">
+        <div className="mt-2 bg-zinc-900/95 border border-zinc-700 rounded-lg p-4 backdrop-blur-sm min-w-[220px]">
           <p className="text-xs font-mono text-zinc-500 uppercase mb-3">Node Types</p>
           <div className="space-y-2">
             {NODE_TYPES.map(({ key, label, color }) => (
@@ -83,22 +117,49 @@ export default function GraphControls({ data, onFilterChange }: GraphControlsPro
             ))}
           </div>
 
+          {/* Contributor filter */}
           <div className="mt-4 pt-3 border-t border-zinc-800">
-            <p className="text-xs font-mono text-zinc-500 uppercase mb-2">Legend</p>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-3 h-3 rounded-full bg-pink-500" />
-              <span className="text-xs text-zinc-400">AI/Bot contributor</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-emerald-500" />
-              <span className="text-xs text-zinc-400">Human contributor</span>
+            <p className="text-xs font-mono text-zinc-500 uppercase mb-3">Contributors</p>
+            <div className="space-y-2">
+              {CONTRIBUTOR_TYPES.map(({ key, label, color }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={activeContributors.has(key)}
+                    onChange={() => toggleContributor(key)}
+                    className="sr-only"
+                  />
+                  <span
+                    className={`w-3 h-3 rounded-full border-2 transition-all ${
+                      activeContributors.has(key) ? 'scale-100' : 'scale-75 opacity-30'
+                    }`}
+                    style={{
+                      backgroundColor: activeContributors.has(key) ? color : 'transparent',
+                      borderColor: color,
+                    }}
+                  />
+                  <span className={`text-xs font-mono transition-opacity ${
+                    activeContributors.has(key) ? 'text-zinc-200' : 'text-zinc-500'
+                  }`}>
+                    {label}
+                  </span>
+                  <span className="text-xs text-zinc-600 ml-auto">
+                    {key === 'bot' ? botNodeCount : humanNodeCount}
+                  </span>
+                </label>
+              ))}
             </div>
           </div>
 
           <div className="mt-4 pt-3 border-t border-zinc-800">
             <p className="text-xs font-mono text-zinc-500">
-              {data.nodes.length} nodes · {data.edges.length} edges
+              {visibleNodeCount} nodes · {visibleEdgeCount} edges
             </p>
+            {(visibleNodeCount < data.nodes.length) && (
+              <p className="text-xs font-mono text-zinc-600 mt-1">
+                ({data.nodes.length - visibleNodeCount} hidden)
+              </p>
+            )}
           </div>
         </div>
       )}

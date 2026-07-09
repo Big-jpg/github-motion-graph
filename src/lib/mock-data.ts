@@ -1,14 +1,14 @@
 // src/lib/mock-data.ts
 import { useMemo } from 'react';
-import type { GraphData } from './types';
+import type { GraphData, GraphNode } from './types';
 
 export function useMockData(): GraphData {
   return useMemo(() => generateMockData(), []);
 }
 
 export function generateMockData(): GraphData {
-  const nodes = [];
-  const edges = [];
+  const nodes: GraphNode[] = [];
+  const edges: { source: string; target: string; type: string; weight: number }[] = [];
 
   // Repositories
   const repos = [
@@ -25,9 +25,10 @@ export function generateMockData(): GraphData {
   for (const repo of repos) {
     nodes.push({
       id: repo.id,
-      type: 'repository' as const,
+      type: 'repository',
       label: repo.name,
       metadata: { language: repo.language, stars: Math.floor(Math.random() * 50) },
+      contributorType: null,
     });
   }
 
@@ -42,9 +43,10 @@ export function generateMockData(): GraphData {
   for (const user of users) {
     nodes.push({
       id: user.id,
-      type: 'user' as const,
+      type: 'user',
       label: user.login,
       metadata: { isBot: user.isBot },
+      contributorType: user.isBot ? 'bot' : 'human',
     });
   }
 
@@ -56,9 +58,10 @@ export function generateMockData(): GraphData {
       const bid = `branch:${branchId}`;
       nodes.push({
         id: bid,
-        type: 'branch' as const,
+        type: 'branch',
         label: name,
         metadata: { isDefault: name === 'main', repositoryId: repo.id },
+        contributorType: null,
       });
       edges.push({ source: bid, target: repo.id, type: 'BELONGS_TO', weight: 1 });
       branchId++;
@@ -78,13 +81,14 @@ export function generateMockData(): GraphData {
 
       nodes.push({
         id: cid,
-        type: 'commit' as const,
+        type: 'commit',
         label: Math.random().toString(36).substring(2, 9),
         metadata: {
           message: randomCommitMessage(),
           authorName: author.login,
           committedAt: randomDate(),
         },
+        contributorType: author.isBot ? 'bot' : 'human',
       });
 
       // Commit → Branch
@@ -112,7 +116,7 @@ export function generateMockData(): GraphData {
 
       nodes.push({
         id: pid,
-        type: 'pullRequest' as const,
+        type: 'pullRequest',
         label: `#${prId}`,
         metadata: {
           title: randomPRTitle(),
@@ -120,6 +124,7 @@ export function generateMockData(): GraphData {
           additions: Math.floor(Math.random() * 500),
           deletions: Math.floor(Math.random() * 200),
         },
+        contributorType: author.isBot ? 'bot' : 'human',
       });
 
       // User → PR
