@@ -164,81 +164,66 @@ export async function POST(request: NextRequest) {
 
       // Fetch branches
       try {
-        // Paginate branches
+        const branchesData = await githubGraphQL<{
+          repository: { refs: { nodes: BranchNode[] } }
+        }>(BRANCHES_QUERY, { owner: username, name: repo.name });
+
+        const branchNodes = branchesData.repository?.refs?.nodes || [];
         const branchMap: Record<string, number> = {};
-        let branchesCursor: string | null | undefined = null;
-        while (true) {
-          const branchesData = await githubGraphQL<{
-            repository: { refs: { pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }; nodes?: BranchNode[] } } | null
-          }>(BRANCHES_QUERY, { owner: username, name: repo.name, cursor: branchesCursor });
 
-          const branchNodes = branchesData.repository?.refs?.nodes || [];
+        for (const branch of branchNodes) {
+          const branchResult = await db.insert(schema.branches).values({
+            name: branch.name,
+            repositoryId: repoId,
+            isDefault: branch.name === (repo.defaultBranchRef?.name || 'main'),
+            createdAt: branch.target?.committedDate ? new Date(branch.target.committedDate) : null,
+          }).onConflictDoNothing().returning({ id: schema.branches.id });
 
-          for (const branch of branchNodes) {
-            const branchResult = await db.insert(schema.branches).values({
-              name: branch.name,
-              repositoryId: repoId,
-              isDefault: branch.name === (repo.defaultBranchRef?.name || 'main'),
-              createdAt: branch.target?.committedDate ? new Date(branch.target.committedDate) : null,
-            }).onConflictDoNothing().returning({ id: schema.branches.id });
-
-            if (branchResult.length > 0) {
-              branchMap[branch.name] = branchResult[0].id;
-              stats.branches++;
-            } else {
-              // Get existing branch id
-              const existing = await db.select({ id: schema.branches.id })
-                .from(schema.branches)
-                .where(eq(schema.branches.name, branch.name))
-                .limit(1);
-              if (existing.length > 0) branchMap[branch.name] = existing[0].id;
-            }
+          if (branchResult.length > 0) {
+            branchMap[branch.name] = branchResult[0].id;
+            stats.branches++;
+          } else {
+            // Get existing branch id
+            const existing = await db.select({ id: schema.branches.id })
+              .from(schema.branches)
+              .where(eq(schema.branches.name, branch.name))
+              .limit(1);
+            if (existing.length > 0) branchMap[branch.name] = existing[0].id;
           }
-
-          const pageInfo = branchesData.repository?.refs?.pageInfo;
-          if (!pageInfo || !pageInfo.hasNextPage) break;
-          branchesCursor = pageInfo.endCursor || null;
         }
 
         // Fetch commits from default branch
         const defaultBranch = repo.defaultBranchRef?.name || 'main';
         try {
-          // Paginate commits for default branch
-          let commitsCursor: string | null | undefined = null;
-          while (true) {
-            const commitsData = await githubGraphQL<{
-              repository: { ref: { target: { history: { pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }; nodes?: CommitNode[] } } } | null } | null
-            }>(COMMITS_QUERY, { owner: username, name: repo.name, branch: `refs/heads/${defaultBranch}`, cursor: commitsCursor });
+          const commitsData = await githubGraphQL<{
+            repository: { ref: { target: { history: { nodes: CommitNode[] } } } | null }
+          }>(COMMITS_QUERY, { owner: username, name: repo.name, branch: `refs/heads/${defaultBranch}` });
 
-            const commitNodes = commitsData.repository?.ref?.target?.history?.nodes || [];
+          const commitNodes = commitsData.repository?.ref?.target?.history?.nodes || [];
 
-            for (const commit of commitNodes) {
-              let userId: number | null = null;
-              if (commit.author.user?.login) {
-                userId = await getOrCreateUser(db, commit.author.user.login, commit.author.user.avatarUrl, commit.author.name);
-                stats.users++;
-              } else if (commit.author.name) {
-                const syntheticLogin = commit.author.email || commit.author.name.replace(/\s+/g, '-').toLowerCase();
-                userId = await getOrCreateUser(db, syntheticLogin, undefined, commit.author.name);
-              }
-
-              await db.insert(schema.commits).values({
-                sha: commit.oid,
-                message: commit.message.substring(0, 500),
-                authorName: commit.author.name,
-                authorEmail: commit.author.email,
-                committedAt: new Date(commit.committedDate),
-                repositoryId: repoId,
-                branchId: branchMap[defaultBranch] || null,
-                userId,
-              }).onConflictDoNothing();
-
-              stats.commits++;
+          for (const commit of commitNodes) {
+            let userId: number | null = null;
+            if (commit.author.user?.login) {
+              userId = await getOrCreateUser(db, commit.author.user.login, commit.author.user.avatarUrl, commit.author.name);
+              stats.users++;
+            } else if (commit.author.name) {
+              // Create a synthetic user for non-GitHub authors
+              const syntheticLogin = commit.author.email || commit.author.name.replace(/\s+/g, '-').toLowerCase();
+              userId = await getOrCreateUser(db, syntheticLogin, undefined, commit.author.name);
             }
 
-            const pageInfo = commitsData.repository?.ref?.target?.history?.pageInfo;
-            if (!pageInfo || !pageInfo.hasNextPage) break;
-            commitsCursor = pageInfo.endCursor || null;
+            await db.insert(schema.commits).values({
+              sha: commit.oid,
+              message: commit.message.substring(0, 500),
+              authorName: commit.author.name,
+              authorEmail: commit.author.email,
+              committedAt: new Date(commit.committedDate),
+              repositoryId: repoId,
+              branchId: branchMap[defaultBranch] || null,
+              userId,
+            }).onConflictDoNothing();
+
+            stats.commits++;
           }
         } catch (e) {
           console.error(`Error fetching commits for ${repo.name}:`, e);
@@ -246,79 +231,71 @@ export async function POST(request: NextRequest) {
 
         // Fetch pull requests
         try {
-          // Paginate pull requests
-          let prsCursor: string | null | undefined = null;
-          while (true) {
-            const prsData = await githubGraphQL<{
-              repository: { pullRequests: { pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }; nodes?: PRNode[] } } | null
-            }>(PRS_QUERY, { owner: username, name: repo.name, cursor: prsCursor });
+          const prsData = await githubGraphQL<{
+            repository: { pullRequests: { nodes: PRNode[] } }
+          }>(PRS_QUERY, { owner: username, name: repo.name });
 
-            const prNodes = prsData.repository?.pullRequests?.nodes || [];
+          const prNodes = prsData.repository?.pullRequests?.nodes || [];
 
-            for (const pr of prNodes) {
-              let authorId: number | null = null;
-              if (pr.author?.login) {
-                authorId = await getOrCreateUser(db, pr.author.login, pr.author.avatarUrl);
-              }
+          for (const pr of prNodes) {
+            let authorId: number | null = null;
+            if (pr.author?.login) {
+              authorId = await getOrCreateUser(db, pr.author.login, pr.author.avatarUrl);
+            }
 
-              const prResult = await db.insert(schema.pullRequests).values({
-                nodeId: pr.id,
-                number: pr.number,
-                title: pr.title,
+            const prResult = await db.insert(schema.pullRequests).values({
+              nodeId: pr.id,
+              number: pr.number,
+              title: pr.title,
+              state: pr.state,
+              createdAt: new Date(pr.createdAt),
+              mergedAt: pr.mergedAt ? new Date(pr.mergedAt) : null,
+              closedAt: pr.closedAt ? new Date(pr.closedAt) : null,
+              additions: pr.additions,
+              deletions: pr.deletions,
+              headBranch: pr.headRefName,
+              baseBranch: pr.baseRefName,
+              repositoryId: repoId,
+              authorId,
+            }).onConflictDoUpdate({
+              target: schema.pullRequests.nodeId,
+              set: {
                 state: pr.state,
-                createdAt: new Date(pr.createdAt),
                 mergedAt: pr.mergedAt ? new Date(pr.mergedAt) : null,
                 closedAt: pr.closedAt ? new Date(pr.closedAt) : null,
                 additions: pr.additions,
                 deletions: pr.deletions,
-                headBranch: pr.headRefName,
-                baseBranch: pr.baseRefName,
+              },
+            }).returning({ id: schema.pullRequests.id });
+
+            const prId = prResult[0].id;
+            stats.prs++;
+
+            // Create merge event if merged
+            if (pr.mergedAt && pr.mergedBy) {
+              const mergedById = await getOrCreateUser(db, pr.mergedBy.login, pr.mergedBy.avatarUrl);
+              await db.insert(schema.mergeEvents).values({
+                prId,
+                mergedById,
+                mergedAt: new Date(pr.mergedAt),
                 repositoryId: repoId,
-                authorId,
-              }).onConflictDoUpdate({
-                target: schema.pullRequests.nodeId,
-                set: {
-                  state: pr.state,
-                  mergedAt: pr.mergedAt ? new Date(pr.mergedAt) : null,
-                  closedAt: pr.closedAt ? new Date(pr.closedAt) : null,
-                  additions: pr.additions,
-                  deletions: pr.deletions,
-                },
-              }).returning({ id: schema.pullRequests.id });
-
-              const prId = prResult[0].id;
-              stats.prs++;
-
-              // Create merge event if merged
-              if (pr.mergedAt && pr.mergedBy) {
-                const mergedById = await getOrCreateUser(db, pr.mergedBy.login, pr.mergedBy.avatarUrl);
-                await db.insert(schema.mergeEvents).values({
-                  prId,
-                  mergedById,
-                  mergedAt: new Date(pr.mergedAt),
-                  repositoryId: repoId,
-                }).onConflictDoNothing();
-              }
-
-              // Link commits to PRs
-              for (const commitRef of pr.commits.nodes) {
-                const commitRecord = await db.select({ id: schema.commits.id })
-                  .from(schema.commits)
-                  .where(eq(schema.commits.sha, commitRef.commit.oid))
-                  .limit(1);
-
-                if (commitRecord.length > 0) {
-                  await db.insert(schema.commitPullRequests).values({
-                    commitId: commitRecord[0].id,
-                    pullRequestId: prId,
-                  }).onConflictDoNothing();
-                }
-              }
+              }).onConflictDoNothing();
             }
 
-            const pageInfo = prsData.repository?.pullRequests?.pageInfo;
-            if (!pageInfo || !pageInfo.hasNextPage) break;
-            prsCursor = pageInfo.endCursor || null;
+            // Link commits to PRs
+            for (const commitRef of pr.commits.nodes) {
+              const commitRecord = await db.select({ id: schema.commits.id })
+                .from(schema.commits)
+                .where(eq(schema.commits.sha, commitRef.commit.oid))
+                .limit(1);
+
+              if (commitRecord.length > 0) {
+                await db.insert(schema.commitPullRequests).values({
+                  commitId: commitRecord[0].id,
+                  pullRequestId: prId,
+                }).onConflictDoNothing();
+              }
+            }
           }
         } catch (e) {
           console.error(`Error fetching PRs for ${repo.name}:`, e);
