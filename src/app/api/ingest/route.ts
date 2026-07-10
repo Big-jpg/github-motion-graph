@@ -117,21 +117,12 @@ export async function POST(request: NextRequest) {
     // Ensure tables exist
     await createTables();
 
-    // Fetch repositories (paginate to collect all pages)
-    const repos: RepoNode[] = [];
-    let reposCursor: string | undefined | null = null;
-    while (true) {
-      const reposData = await githubGraphQL<{
-        user: { repositories: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: RepoNode[] } }
-      }>(REPOS_QUERY, { login: username, cursor: reposCursor });
+    // Fetch repositories
+    const reposData = await githubGraphQL<{
+      user: { repositories: { pageInfo: { hasNextPage: boolean; endCursor: string }; nodes: RepoNode[] } }
+    }>(REPOS_QUERY, { login: username });
 
-      const nodes = reposData.user.repositories.nodes || [];
-      repos.push(...nodes);
-
-      const pageInfo = reposData.user.repositories.pageInfo;
-      if (!pageInfo || !pageInfo.hasNextPage) break;
-      reposCursor = pageInfo.endCursor;
-    }
+    const repos = reposData.user.repositories.nodes;
     const stats = { repos: 0, branches: 0, commits: 0, prs: 0, users: 0 };
 
     for (const repo of repos) {
