@@ -24,9 +24,21 @@ if (-not (Get-Command vercel -ErrorAction SilentlyContinue) -and -not (Get-Comma
   exit 2
 }
 
+function IsValidVercelToken($token) {
+  if (-not $token) { return $false }
+  if ($token -match '[\.-]') { return $false }
+  return $true
+}
+
 $cmd = @('env','pull',$Out,'--environment',$Environment)
 if ($Project) { $cmd += @('--project', $Project) }
-if ($Token) { $cmd += @('--token', $Token) }
+if ($Token) {
+  if (IsValidVercelToken $Token) {
+    $cmd += @('--token', $Token)
+  } else {
+    Write-Warning "VERCEL_TOKEN appears invalid for use with --token. Use a Vercel personal access token, not an OIDC token from .env.local. Falling back to logged-in CLI authentication."
+  }
+}
 
 Write-Host "Pulling Vercel env vars ($Environment) into $Out"
 try {
