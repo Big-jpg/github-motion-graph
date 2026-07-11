@@ -56,12 +56,25 @@ export const CONTRIBUTOR_TYPES = [
   },
 ] as const;
 
+export interface GraphDynamics {
+  cohesion: number;
+  separation: number;
+  motion: number;
+}
+
+export const DEFAULT_DYNAMICS: GraphDynamics = {
+  cohesion: 22,
+  separation: 38,
+  motion: 12,
+};
+
 export interface GraphFilters {
   nodeTypes: Set<string>;
   repos: Set<string>;
   users: Set<string>;
   contributors: Set<string>;
   connections: boolean;
+  dynamics: GraphDynamics;
 }
 
 interface GraphControlsProps {
@@ -85,6 +98,7 @@ export default function GraphControls({
   );
   const [expanded, setExpanded] = useState(false);
   const [connectionsVisible, setConnectionsVisible] = useState(true);
+  const [dynamics, setDynamics] = useState<GraphDynamics>(DEFAULT_DYNAMICS);
 
   const nodeCounts = useMemo(
     () =>
@@ -109,6 +123,7 @@ export default function GraphControls({
     types: Set<string>,
     contributors: Set<string>,
     connections = connectionsVisible,
+    nextDynamics = dynamics,
   ) => {
     onFilterChange({
       nodeTypes: types,
@@ -116,7 +131,14 @@ export default function GraphControls({
       users: new Set(),
       contributors,
       connections,
+      dynamics: nextDynamics,
     });
+  };
+
+  const updateDynamics = (key: keyof GraphDynamics, value: number) => {
+    const next = { ...dynamics, [key]: value };
+    setDynamics(next);
+    emitFilters(activeTypes, activeContributors, connectionsVisible, next);
   };
 
   const toggleConnections = () => {
@@ -153,13 +175,17 @@ export default function GraphControls({
     setActiveTypes(types);
     setActiveContributors(contributors);
     setConnectionsVisible(true);
-    emitFilters(types, contributors, true);
+    setDynamics(DEFAULT_DYNAMICS);
+    emitFilters(types, contributors, true, DEFAULT_DYNAMICS);
   };
 
   const allFiltersActive =
     activeTypes.size === NODE_TYPES.length &&
     activeContributors.size === CONTRIBUTOR_TYPES.length &&
-    connectionsVisible;
+    connectionsVisible &&
+    dynamics.cohesion === DEFAULT_DYNAMICS.cohesion &&
+    dynamics.separation === DEFAULT_DYNAMICS.separation &&
+    dynamics.motion === DEFAULT_DYNAMICS.motion;
 
   return (
     <div
@@ -347,6 +373,41 @@ export default function GraphControls({
             <p className="px-3 pt-1.5 text-[0.68rem] font-semibold leading-4 text-muted-foreground">
               Hides the bridges while preserving each island&apos;s shape.
             </p>
+          </div>
+
+          <div className="mt-3 border-t-2 border-border pt-3">
+            <p className="px-2 pb-2 text-[0.68rem] font-black uppercase tracking-[0.14em] text-muted-foreground">
+              Graph dynamics
+            </p>
+            <div className="space-y-3 rounded-2xl bg-secondary/70 px-3 py-3">
+              {([
+                ["cohesion", "Type cohesion", "Gather similar node types"],
+                ["separation", "Separation", "Keep unlike nodes apart"],
+                ["motion", "Background wave", "Periodic directional pressure"],
+              ] as const).map(([key, label, description]) => (
+                <label key={key} className="block">
+                  <span className="flex items-center justify-between gap-3 text-xs font-extrabold">
+                    <span>{label}</span>
+                    <span className="font-mono text-[0.68rem] text-muted-foreground">
+                      {dynamics[key]}
+                    </span>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={dynamics[key]}
+                    onChange={event => updateDynamics(key, Number(event.target.value))}
+                    aria-label={label}
+                    className="mt-1 h-5 w-full cursor-pointer accent-[#65a897]"
+                  />
+                  <span className="block text-[0.65rem] font-semibold text-muted-foreground">
+                    {description}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
 import ForceGraphVisualization from "@/components/ForceGraph";
 import GraphControls from "@/components/GraphControls";
-import type { GraphFilters } from "@/components/GraphControls";
+import { DEFAULT_DYNAMICS, type GraphFilters } from "@/components/GraphControls";
 import type { ForceGraphNode, GraphData } from "@/lib/types";
 
 type SelectedNode = ForceGraphNode & { strokeColor?: string };
@@ -15,6 +15,7 @@ const initialFilters = (): GraphFilters => ({
   users: new Set<string>(),
   contributors: new Set(["bot", "human"]),
   connections: true,
+  dynamics: DEFAULT_DYNAMICS,
 });
 
 export default function RepoGraphPage({

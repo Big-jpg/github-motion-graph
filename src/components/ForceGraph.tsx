@@ -10,7 +10,7 @@ import type {
 } from "react-force-graph-2d";
 import type { MutableRefObject, ReactElement } from "react";
 import type { ForceGraphLink, ForceGraphNode, GraphData, GraphEdge, GraphNode } from "@/lib/types";
-import { CONTRIBUTOR_TYPES, NODE_TYPES } from "./GraphControls";
+import { CONTRIBUTOR_TYPES, DEFAULT_DYNAMICS, NODE_TYPES } from "./GraphControls";
 import type { GraphFilters } from "./GraphControls";
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
@@ -143,6 +143,97 @@ function contractHiddenCommits(
     .slice(0, SUMMARY_LINK_LIMIT)
     .map(edge => ({ ...edge, weight: Math.min(8, 0.35 + Math.log2(edge.weight + 1)) }));
   return [...normal, ...strongest];
+}
+
+type SemanticForce = ((alpha: number) => void) & {
+  initialize: (nodes: NodeVisual[]) => void;
+  advanceWave: () => void;
+};
+
+function createSemanticForce(
+  cohesion: number,
+  separation: number,
+  motion: number,
+): SemanticForce {
+  let nodes: NodeVisual[] = [];
+  let phase = 0;
+  const force = ((alpha: number) => {
+    if (nodes.length === 0) return;
+
+    if (cohesion > 0) {
+      const centers = new Map<string, { x: number; y: number; count: number }>();
+      for (const node of nodes) {
+        const center = centers.get(node.type) ?? { x: 0, y: 0, count: 0 };
+        center.x += node.x ?? 0;
+        center.y += node.y ?? 0;
+        center.count++;
+        centers.set(node.type, center);
+      }
+      const strength = (cohesion / 100) * 0.012 * alpha;
+      for (const node of nodes) {
+        const center = centers.get(node.type);
+        if (!center || center.count < 2) continue;
+        node.vx = (node.vx ?? 0) + (center.x / center.count - (node.x ?? 0)) * strength;
+        node.vy = (node.vy ?? 0) + (center.y / center.count - (node.y ?? 0)) * strength;
+      }
+    }
+
+    if (separation > 0) {
+      const cellSize = 34;
+      const buckets = new Map<string, NodeVisual[]>();
+      const strength = (separation / 100) * 0.42 * alpha;
+      for (const node of nodes) {
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+        const cellX = Math.floor(x / cellSize);
+        const cellY = Math.floor(y / cellSize);
+        let compared = 0;
+        for (let offsetX = -1; offsetX <= 1 && compared < 18; offsetX++) {
+          for (let offsetY = -1; offsetY <= 1 && compared < 18; offsetY++) {
+            const nearby = buckets.get(`${cellX + offsetX}:${cellY + offsetY}`) ?? [];
+            for (let index = nearby.length - 1; index >= 0 && compared < 18; index--) {
+              const other = nearby[index];
+              let dx = x - (other.x ?? 0);
+              let dy = y - (other.y ?? 0);
+              let distance = Math.hypot(dx, dy);
+              const unlike = node.type !== other.type;
+              const minimum = ((node.size ?? 5) + (other.size ?? 5) + 5) * (unlike ? 1.35 : 1);
+              if (distance < minimum) {
+                if (distance < 0.01) {
+                  dx = 0.01 + Math.random() * 0.02;
+                  dy = 0.01 + Math.random() * 0.02;
+                  distance = Math.hypot(dx, dy);
+                }
+                const pressure = ((minimum - distance) / distance) * strength;
+                node.vx = (node.vx ?? 0) + dx * pressure;
+                node.vy = (node.vy ?? 0) + dy * pressure;
+                other.vx = (other.vx ?? 0) - dx * pressure;
+                other.vy = (other.vy ?? 0) - dy * pressure;
+              }
+              compared++;
+            }
+          }
+        }
+        const key = `${cellX}:${cellY}`;
+        const bucket = buckets.get(key) ?? [];
+        bucket.push(node);
+        buckets.set(key, bucket);
+      }
+    }
+
+    if (motion > 0) {
+      const strength = (motion / 100) * 0.55 * alpha;
+      for (const node of nodes) {
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+        node.vx = (node.vx ?? 0) + Math.sin(y * 0.012 + phase) * strength;
+        node.vy = (node.vy ?? 0) + Math.cos(x * 0.01 - phase * 0.8) * strength * 0.7;
+      }
+    }
+  }) as SemanticForce;
+  force.initialize = nextNodes => { nodes = nextNodes; };
+  force.advanceWave = () => { phase += 0.55; };
+  return force;
 }
 
 interface ForceGraphProps {
@@ -312,6 +403,16 @@ export default function ForceGraphVisualization({
     return { nodes, links };
   }, [data, filters, lodLevel]);
 
+  const dynamics = filters?.dynamics ?? DEFAULT_DYNAMICS;
+  const semanticForce = useMemo(
+    () => createSemanticForce(
+      dynamics.cohesion,
+      dynamics.separation,
+      reduceMotion || lodLevel === "detail" ? 0 : dynamics.motion,
+    ),
+    [dynamics.cohesion, dynamics.motion, dynamics.separation, lodLevel, reduceMotion],
+  );
+
   const fitSignature = useMemo(
     () => `${data.nodes.length}:${data.edges.length}:${[...(filters?.nodeTypes ?? [])].join(",")}:${[...(filters?.contributors ?? [])].join(",")}`,
     [data, filters?.contributors, filters?.nodeTypes],
@@ -323,6 +424,25 @@ export default function ForceGraphVisualization({
       filters?.connections === false ? 0 : graphData.links.length,
     );
   }, [filters?.connections, graphData, onVisibleCountChange]);
+
+  useEffect(() => {
+    const graph = fgRef.current;
+    if (!graph) return;
+    graph.d3Force("semantic-dynamics", semanticForce as never);
+    graph.d3ReheatSimulation();
+    return () => {
+      graph.d3Force("semantic-dynamics", null as never);
+    };
+  }, [graphData, semanticForce]);
+
+  useEffect(() => {
+    if (reduceMotion || lodLevel === "detail" || dynamics.motion === 0) return;
+    const timer = window.setInterval(() => {
+      semanticForce.advanceWave();
+      fgRef.current?.d3ReheatSimulation();
+    }, 1800);
+    return () => window.clearInterval(timer);
+  }, [dynamics.motion, lodLevel, reduceMotion, semanticForce]);
 
   const handleNodeClick = useCallback(
     (node: NodeObject<NodeVisual>) => {
