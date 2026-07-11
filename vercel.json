@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "src/app/api/queues/github-ingestion/route.ts": {
+      "maxDuration": 300,
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "github-ingestion",
+          "retryAfterSeconds": 30,
+          "initialDelaySeconds": 0
+        }
+      ]
+    }
+  }
+}

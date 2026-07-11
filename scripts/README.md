@@ -28,9 +28,13 @@ pnpm ingest -- --username Big-jpg --repo Big-jpg/github-motion-graph
 
 # Smaller history scope for a large repository
 pnpm ingest -- --repo Big-jpg/github-motion-graph --default-branch-only
+
+# Detach and resume watching the durable run later
+pnpm ingest -- --no-wait
+pnpm ingest -- --run <run-id>
 ```
 
-Run `pnpm ingest -- --help` for visibility, fork, affiliation, branch, URL, and timeout options. The helper never accepts the ingest secret as a command-line argument; it reads `INGEST_SECRET` from the shell, `.env.local`, or `.env` so the secret is not exposed in process listings.
+Run `pnpm ingest -- --help` for visibility, fork, affiliation, branch, URL, wait, and timeout options. The helper submits a queue run and polls its status; Ctrl+C does not cancel server-side work. It never accepts the ingest secret as a command-line argument, reading it from the shell, `.env.local`, or `.env` instead.
 
 Bash:
 

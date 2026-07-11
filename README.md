@@ -55,7 +55,7 @@ pnpm dev
 
 ## Ingestion
 
-The ingest endpoint backfills every page of repositories, branches, branch histories, pull requests, and pull-request commits available to `GH_TOKEN`. By default it ingests the authenticated viewer's public repositories across owner, collaborator, and organization-member affiliations, includes forks, and traverses every branch.
+The ingest endpoint creates a durable Neon-backed run and submits it to Vercel Queues. A discovery job paginates the complete repository inventory, then fans out one idempotent job per repository. Successful repositories stay complete when another repository fails or retries, and every attempt/result remains inspectable in the database.
 
 The recommended on-demand helper loads `INGEST_SECRET`, `INGEST_URL`, and the optional `GITHUB_USERNAME` from `.env.local`:
 
@@ -64,6 +64,10 @@ pnpm ingest
 
 # Or explicitly safety-check the GitHub account and narrow the run
 pnpm ingest -- --username Big-jpg --repo Big-jpg/github-motion-graph
+
+# Queue without waiting, or resume watching later
+pnpm ingest -- --no-wait
+pnpm ingest -- --run <run-id>
 ```
 
 Run `pnpm ingest -- --help` for branch, visibility, fork, affiliation, URL, and timeout controls. Direct HTTP invocation remains available for automation:
@@ -101,9 +105,9 @@ Scope can be narrowed in the request body:
 | `allBranches` | `true` | Set `false` to traverse only the default branch |
 | `branches` | unset | Optional branch-name allowlist; when present it overrides `allBranches` |
 
-The response reports expected and fetched connection counts, rows/links written, and a failure list. A fully complete run returns HTTP 200 with `success: true`; a run that completed only partially returns HTTP 207 with `success: false` and `status: "partial"`. GitHub requests use bounded retries for timeouts, transient failures, and short rate-limit waits.
+`POST /api/ingest` returns HTTP 202 with `runId` and `statusUrl`. `GET /api/ingest/:runId` (with the same ingest secret) reports queued/running/completed/failed jobs and their last errors. Runs finish as `complete` or `partial`; queue deliveries retry up to five times while graph writes remain idempotent.
 
-Deep all-repository/all-branch backfills can exceed a serverless request budget on large accounts. Use `repositoryNames` to run recoverable repository-sized chunks; the repository inventory is still fully paginated before the allowlist is applied.
+The current work unit is one repository. This removes the account-wide five-minute bottleneck. An exceptionally large single repository can later be split into branch/PR cursor jobs without changing the submit or status APIs.
 
 For private or organization repositories, the token must have access to those repositories and any required organization SSO authorization. Fine-grained tokens should grant repository metadata and contents plus pull-request read access. Repository visibility is never broadened beyond what the token can see.
 

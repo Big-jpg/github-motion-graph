@@ -22,6 +22,7 @@ import {
   type PullRequestCommitNode,
 } from '@/lib/github';
 import { ensureTables } from '@/db/migrate';
+import { createIngestionRun } from '@/lib/ingest-queue';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -826,7 +827,7 @@ async function ingestRepository(context: IngestContext, repo: RepoNode) {
   await ingestPullRequests(context, repo, repositoryId, branchIds);
 }
 
-export async function POST(request: NextRequest) {
+export async function runSynchronousIngestion(request: NextRequest) {
   const authError = verifyIngestSecret(request);
   if (authError) return authError;
 
@@ -949,6 +950,41 @@ export async function POST(request: NextRequest) {
     console.error('Ingestion error:', error);
     return NextResponse.json(
       { success: false, complete: false, status: 'failed', ...serializeError(error) },
+      { status: 500 },
+    );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const authError = verifyIngestSecret(request);
+  if (authError) return authError;
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+  }
+  try {
+    // Validate before creating durable work. The worker validates again so a
+    // malformed or stale queued payload can never reach the graph writer.
+    parseOptions(body);
+    const { runId } = await createIngestionRun(
+      body && typeof body === 'object' && !Array.isArray(body)
+        ? body as Record<string, unknown>
+        : {},
+    );
+    return NextResponse.json({
+      success: true,
+      accepted: true,
+      status: 'queued',
+      runId,
+      statusUrl: `/api/ingest/${runId}`,
+      message: 'Ingestion queued',
+    }, { status: 202 });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, status: 'failed', ...serializeError(error) },
       { status: 500 },
     );
   }

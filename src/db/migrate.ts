@@ -3,7 +3,7 @@
 // This file provides a programmatic migration alternative
 import { neon } from '@neondatabase/serverless';
 
-const CURRENT_SCHEMA_VERSION = '2026-07-11-lossless-github-graph-v3';
+const CURRENT_SCHEMA_VERSION = '2026-07-11-durable-ingestion-v4';
 
 let schemaReadyPromise: Promise<void> | null = null;
 
@@ -144,6 +144,42 @@ export async function createTables() {
       id SERIAL PRIMARY KEY,
       branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
       commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS ingestion_runs (
+      id TEXT PRIMARY KEY,
+      viewer_login TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      options JSONB NOT NULL DEFAULT '{}'::jsonb,
+      total_jobs INTEGER NOT NULL DEFAULT 0,
+      completed_jobs INTEGER NOT NULL DEFAULT 0,
+      failed_jobs INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS ingestion_jobs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES ingestion_runs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      result JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      UNIQUE (run_id, dedupe_key)
     )
   `;
 
@@ -572,6 +608,8 @@ export async function createTables() {
   await sql`CREATE INDEX IF NOT EXISTS idx_repository_commits_commit ON repository_commits(commit_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_branch_commits_branch ON branch_commits(branch_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_branch_commits_commit ON branch_commits(commit_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status ON ingestion_runs(status, updated_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_run_status ON ingestion_jobs(run_id, status)`;
 
   await sql`
     INSERT INTO schema_migrations (version)
