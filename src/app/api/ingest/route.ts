@@ -21,7 +21,7 @@ import {
   type PRNode,
   type PullRequestCommitNode,
 } from '@/lib/github';
-import { createTables } from '@/db/migrate';
+import { ensureTables } from '@/db/migrate';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -852,7 +852,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await createTables();
+    await ensureTables();
 
     const sqlClient = neon(process.env.DATABASE_URL!);
     const db = drizzle(sqlClient, { schema });

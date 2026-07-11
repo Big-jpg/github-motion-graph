@@ -3,7 +3,19 @@
 // This file provides a programmatic migration alternative
 import { neon } from '@neondatabase/serverless';
 
-const CURRENT_SCHEMA_VERSION = '2026-07-11-lossless-github-graph-v2';
+const CURRENT_SCHEMA_VERSION = '2026-07-11-lossless-github-graph-v3';
+
+let schemaReadyPromise: Promise<void> | null = null;
+
+export function ensureTables(): Promise<void> {
+  if (!schemaReadyPromise) {
+    schemaReadyPromise = createTables().catch((error) => {
+      schemaReadyPromise = null;
+      throw error;
+    });
+  }
+  return schemaReadyPromise;
+}
 
 export async function createTables() {
   const sql = neon(process.env.DATABASE_URL!);

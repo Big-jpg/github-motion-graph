@@ -2,8 +2,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import type { GraphEdge, GraphNode, GraphResponseMeta } from '@/lib/types';
+import { ensureTables } from '@/db/migrate';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 const MAX_EXPLICIT_GRAPH_LIMIT = 50_000;
 
@@ -56,6 +58,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    await ensureTables();
     const sql = neon(process.env.DATABASE_URL!);
     const repositoryColumns = sql`
       SELECT

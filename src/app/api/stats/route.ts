@@ -1,11 +1,14 @@
 // src/app/api/stats/route.ts
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
+import { ensureTables } from '@/db/migrate';
 
-export const runtime = 'edge';
+export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 export async function GET() {
   try {
+    await ensureTables();
     const sql = neon(process.env.DATABASE_URL!);
 
     const [repoCount] = await sql`SELECT COUNT(*) as count FROM repositories`;
