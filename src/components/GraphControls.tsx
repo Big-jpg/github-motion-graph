@@ -61,6 +61,7 @@ export interface GraphFilters {
   repos: Set<string>;
   users: Set<string>;
   contributors: Set<string>;
+  connections: boolean;
 }
 
 interface GraphControlsProps {
@@ -83,6 +84,7 @@ export default function GraphControls({
     new Set(CONTRIBUTOR_TYPES.map(type => type.key)),
   );
   const [expanded, setExpanded] = useState(false);
+  const [connectionsVisible, setConnectionsVisible] = useState(true);
 
   const nodeCounts = useMemo(
     () =>
@@ -103,13 +105,24 @@ export default function GraphControls({
     [data.nodes],
   );
 
-  const emitFilters = (types: Set<string>, contributors: Set<string>) => {
+  const emitFilters = (
+    types: Set<string>,
+    contributors: Set<string>,
+    connections = connectionsVisible,
+  ) => {
     onFilterChange({
       nodeTypes: types,
       repos: new Set(),
       users: new Set(),
       contributors,
+      connections,
     });
+  };
+
+  const toggleConnections = () => {
+    const next = !connectionsVisible;
+    setConnectionsVisible(next);
+    emitFilters(activeTypes, activeContributors, next);
   };
 
   const toggleType = (type: string) => {
@@ -139,12 +152,14 @@ export default function GraphControls({
     const contributors = new Set<string>(CONTRIBUTOR_TYPES.map(type => type.key));
     setActiveTypes(types);
     setActiveContributors(contributors);
-    emitFilters(types, contributors);
+    setConnectionsVisible(true);
+    emitFilters(types, contributors, true);
   };
 
   const allFiltersActive =
     activeTypes.size === NODE_TYPES.length &&
-    activeContributors.size === CONTRIBUTOR_TYPES.length;
+    activeContributors.size === CONTRIBUTOR_TYPES.length &&
+    connectionsVisible;
 
   return (
     <div
@@ -295,6 +310,43 @@ export default function GraphControls({
                 );
               })}
             </div>
+          </div>
+
+          <div className="mt-3 border-t-2 border-border pt-3">
+            <p className="px-2 pb-1 text-[0.68rem] font-black uppercase tracking-[0.14em] text-muted-foreground">
+              Connections
+            </p>
+            <button
+              type="button"
+              aria-pressed={connectionsVisible}
+              onClick={toggleConnections}
+              className={`flex min-h-11 w-full items-center gap-3 rounded-2xl border-2 px-3 text-left transition-colors ${
+                connectionsVisible
+                  ? "border-border bg-secondary text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <svg
+                aria-hidden="true"
+                className={`size-5 shrink-0 ${connectionsVisible ? "opacity-100" : "opacity-45"}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="5" cy="12" r="2.5" />
+                <circle cx="19" cy="6" r="2.5" />
+                <circle cx="19" cy="18" r="2.5" />
+                <path d="m7.5 11 9-4M7.5 13l9 4" />
+              </svg>
+              <span className="text-sm font-extrabold">Relationship lines</span>
+              <span className="ml-auto font-mono text-[0.7rem] font-semibold text-muted-foreground">
+                {connectionsVisible ? "On" : "Off"}
+              </span>
+            </button>
+            <p className="px-3 pt-1.5 text-[0.68rem] font-semibold leading-4 text-muted-foreground">
+              Hides the bridges while preserving each island&apos;s shape.
+            </p>
           </div>
 
           <div

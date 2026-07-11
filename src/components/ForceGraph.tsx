@@ -217,8 +217,11 @@ export default function ForceGraphVisualization({
   }, [data, filters]);
 
   useEffect(() => {
-    onVisibleCountChange?.(graphData.nodes.length, graphData.links.length);
-  }, [graphData, onVisibleCountChange]);
+    onVisibleCountChange?.(
+      graphData.nodes.length,
+      filters?.connections === false ? 0 : graphData.links.length,
+    );
+  }, [filters?.connections, graphData, onVisibleCountChange]);
 
   const handleNodeClick = useCallback(
     (node: NodeObject<NodeVisual>) => {
@@ -392,6 +395,7 @@ export default function ForceGraphVisualization({
           ctx.fill();
         }}
         linkCanvasObject={paintLink}
+        linkVisibility={filters?.connections !== false}
         onNodeClick={handleNodeClick}
         onNodeHover={node => setHoveredNode(node as NodeObject<NodeVisual> | null)}
         onBackgroundClick={() => onBackgroundClick?.()}

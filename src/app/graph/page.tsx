@@ -14,6 +14,7 @@ const initialFilters = (): GraphFilters => ({
   repos: new Set<string>(),
   users: new Set<string>(),
   contributors: new Set(["bot", "human"]),
+  connections: true,
 });
 
 export default function GraphPage() {
