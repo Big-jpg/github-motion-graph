@@ -3,8 +3,30 @@
 // This file provides a programmatic migration alternative
 import { neon } from '@neondatabase/serverless';
 
+const CURRENT_SCHEMA_VERSION = '2026-07-11-lossless-github-graph-v2';
+
 export async function createTables() {
   const sql = neon(process.env.DATABASE_URL!);
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version TEXT PRIMARY KEY,
+      applied_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  const completedMigration = await sql`
+    SELECT version
+    FROM schema_migrations
+    WHERE version = ${CURRENT_SCHEMA_VERSION}
+    LIMIT 1
+  `;
+  if (completedMigration.length > 0) return;
+
+  // This completion marker deliberately gates the expensive repair/backfill
+  // work without pretending to be a distributed lock. The first invocation is
+  // idempotent, but deployments must serialize that first migration: concurrent
+  // first-run ingests can contend while both observe an absent marker.
   await sql`
     CREATE TABLE IF NOT EXISTS repositories (
       id SERIAL PRIMARY KEY,
@@ -18,7 +40,10 @@ export async function createTables() {
       updated_at TIMESTAMP,
       pushed_at TIMESTAMP,
       stargazer_count INTEGER DEFAULT 0,
-      language TEXT
+      language TEXT,
+      owner_login TEXT,
+      is_fork BOOLEAN DEFAULT FALSE,
+      is_private BOOLEAN DEFAULT FALSE
     )
   `;
 
@@ -69,6 +94,7 @@ export async function createTables() {
       additions INTEGER DEFAULT 0,
       deletions INTEGER DEFAULT 0,
       head_branch TEXT,
+      head_repository_full_name TEXT,
       base_branch TEXT,
       repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
       author_id INTEGER REFERENCES users(id) ON DELETE SET NULL
@@ -93,6 +119,22 @@ export async function createTables() {
     )
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS repository_commits (
+      id SERIAL PRIMARY KEY,
+      repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+      commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS branch_commits (
+      id SERIAL PRIMARY KEY,
+      branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+      commit_id INTEGER NOT NULL REFERENCES commits(id) ON DELETE CASCADE
+    )
+  `;
+
   // Repair older partially-created tables. CREATE TABLE IF NOT EXISTS will not
   // add columns when a table already exists with an earlier shape.
   await sql`
@@ -108,7 +150,9 @@ export async function createTables() {
         'commits',
         'pull_requests',
         'merge_events',
-        'commit_pull_requests'
+        'commit_pull_requests',
+        'repository_commits',
+        'branch_commits'
       ]
       LOOP
         sequence_name := table_name || '_id_seq';
@@ -137,6 +181,9 @@ export async function createTables() {
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMP`;
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS stargazer_count INTEGER DEFAULT 0`;
   await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS language TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS owner_login TEXT`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS is_fork BOOLEAN DEFAULT FALSE`;
+  await sql`ALTER TABLE repositories ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE`;
 
   await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS name TEXT`;
   await sql`ALTER TABLE branches ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
@@ -167,6 +214,7 @@ export async function createTables() {
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS additions INTEGER DEFAULT 0`;
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS deletions INTEGER DEFAULT 0`;
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS head_branch TEXT`;
+  await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS head_repository_full_name TEXT`;
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS base_branch TEXT`;
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
   await sql`ALTER TABLE pull_requests ADD COLUMN IF NOT EXISTS author_id INTEGER`;
@@ -178,6 +226,12 @@ export async function createTables() {
 
   await sql`ALTER TABLE commit_pull_requests ADD COLUMN IF NOT EXISTS commit_id INTEGER`;
   await sql`ALTER TABLE commit_pull_requests ADD COLUMN IF NOT EXISTS pull_request_id INTEGER`;
+
+  await sql`ALTER TABLE repository_commits ADD COLUMN IF NOT EXISTS repository_id INTEGER`;
+  await sql`ALTER TABLE repository_commits ADD COLUMN IF NOT EXISTS commit_id INTEGER`;
+
+  await sql`ALTER TABLE branch_commits ADD COLUMN IF NOT EXISTS branch_id INTEGER`;
+  await sql`ALTER TABLE branch_commits ADD COLUMN IF NOT EXISTS commit_id INTEGER`;
 
   await sql`
     DO $$
@@ -215,7 +269,10 @@ export async function createTables() {
               'updated_at',
               'pushed_at',
               'stargazer_count',
-              'language'
+              'language',
+              'owner_login',
+              'is_fork',
+              'is_private'
             ]::TEXT[]),
             ('branches', ARRAY[
               'id',
@@ -254,6 +311,7 @@ export async function createTables() {
               'additions',
               'deletions',
               'head_branch',
+              'head_repository_full_name',
               'base_branch',
               'repository_id',
               'author_id'
@@ -269,6 +327,16 @@ export async function createTables() {
               'id',
               'commit_id',
               'pull_request_id'
+            ]::TEXT[]),
+            ('repository_commits', ARRAY[
+              'id',
+              'repository_id',
+              'commit_id'
+            ]::TEXT[]),
+            ('branch_commits', ARRAY[
+              'id',
+              'branch_id',
+              'commit_id'
             ]::TEXT[])
         ) AS table_columns(table_name, columns)
       LOOP
@@ -291,11 +359,189 @@ export async function createTables() {
     END $$;
   `;
 
+  // Preserve stable branch ids while collapsing duplicates created before a
+  // repository/name key existed. Repoint both legacy and junction references
+  // before deleting duplicate branch rows.
+  await sql`
+    WITH branch_groups AS (
+      SELECT
+        repository_id,
+        name,
+        MIN(id) AS keep_id,
+        BOOL_OR(COALESCE(is_default, FALSE)) AS is_default,
+        MAX(created_at) AS created_at
+      FROM branches
+      WHERE repository_id IS NOT NULL AND name IS NOT NULL
+      GROUP BY repository_id, name
+    )
+    UPDATE branches b
+    SET
+      is_default = groups.is_default,
+      created_at = COALESCE(groups.created_at, b.created_at)
+    FROM branch_groups groups
+    WHERE b.id = groups.keep_id
+  `;
+
+  await sql`
+    WITH branch_targets AS (
+      SELECT
+        id,
+        MIN(id) OVER (PARTITION BY repository_id, name) AS keep_id
+      FROM branches
+      WHERE repository_id IS NOT NULL AND name IS NOT NULL
+    ), ranked_memberships AS (
+      SELECT
+        bc.id,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(bt.keep_id, bc.branch_id), bc.commit_id
+          ORDER BY bc.id
+        ) AS row_number
+      FROM branch_commits bc
+      LEFT JOIN branch_targets bt ON bt.id = bc.branch_id
+      WHERE bc.branch_id IS NOT NULL AND bc.commit_id IS NOT NULL
+    )
+    DELETE FROM branch_commits bc
+    USING ranked_memberships ranked
+    WHERE bc.id = ranked.id AND ranked.row_number > 1
+  `;
+
+  await sql`
+    WITH branch_targets AS (
+      SELECT
+        id,
+        MIN(id) OVER (PARTITION BY repository_id, name) AS keep_id
+      FROM branches
+      WHERE repository_id IS NOT NULL AND name IS NOT NULL
+    )
+    UPDATE commits c
+    SET branch_id = targets.keep_id
+    FROM branch_targets targets
+    WHERE c.branch_id = targets.id AND targets.id <> targets.keep_id
+  `;
+
+  await sql`
+    WITH branch_targets AS (
+      SELECT
+        id,
+        MIN(id) OVER (PARTITION BY repository_id, name) AS keep_id
+      FROM branches
+      WHERE repository_id IS NOT NULL AND name IS NOT NULL
+    )
+    UPDATE branch_commits bc
+    SET branch_id = targets.keep_id
+    FROM branch_targets targets
+    WHERE bc.branch_id = targets.id AND targets.id <> targets.keep_id
+  `;
+
+  await sql`
+    WITH branch_targets AS (
+      SELECT
+        id,
+        MIN(id) OVER (PARTITION BY repository_id, name) AS keep_id
+      FROM branches
+      WHERE repository_id IS NOT NULL AND name IS NOT NULL
+    )
+    DELETE FROM branches b
+    USING branch_targets targets
+    WHERE b.id = targets.id AND targets.id <> targets.keep_id
+  `;
+
+  // Older ingests used ON CONFLICT DO NOTHING without the corresponding
+  // constraints, so remove already-created duplicate relationship rows first.
+  await sql`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY pr_id ORDER BY id DESC) AS row_number
+      FROM merge_events
+      WHERE pr_id IS NOT NULL
+    )
+    DELETE FROM merge_events me
+    USING ranked
+    WHERE me.id = ranked.id AND ranked.row_number > 1
+  `;
+
+  await sql`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY commit_id, pull_request_id ORDER BY id) AS row_number
+      FROM commit_pull_requests
+      WHERE commit_id IS NOT NULL AND pull_request_id IS NOT NULL
+    )
+    DELETE FROM commit_pull_requests cpr
+    USING ranked
+    WHERE cpr.id = ranked.id AND ranked.row_number > 1
+  `;
+
+  await sql`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY repository_id, commit_id ORDER BY id) AS row_number
+      FROM repository_commits
+      WHERE repository_id IS NOT NULL AND commit_id IS NOT NULL
+    )
+    DELETE FROM repository_commits rc
+    USING ranked
+    WHERE rc.id = ranked.id AND ranked.row_number > 1
+  `;
+
+  await sql`
+    WITH ranked AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY branch_id, commit_id ORDER BY id) AS row_number
+      FROM branch_commits
+      WHERE branch_id IS NOT NULL AND commit_id IS NOT NULL
+    )
+    DELETE FROM branch_commits bc
+    USING ranked
+    WHERE bc.id = ranked.id AND ranked.row_number > 1
+  `;
+
+  await sql`
+    UPDATE repositories
+    SET owner_login = split_part(full_name, '/', 1)
+    WHERE owner_login IS NULL AND position('/' IN full_name) > 0
+  `;
+
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_node_id_unique ON repositories(node_id)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS repositories_full_name_unique ON repositories(full_name)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS users_login_unique ON users(login)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS commits_sha_unique ON commits(sha)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS pull_requests_node_id_unique ON pull_requests(node_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS branches_repository_name_unique ON branches(repository_id, name)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS merge_events_pr_unique ON merge_events(pr_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS commit_pull_requests_commit_pr_unique ON commit_pull_requests(commit_id, pull_request_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS repository_commits_repository_commit_unique ON repository_commits(repository_id, commit_id)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS branch_commits_branch_commit_unique ON branch_commits(branch_id, commit_id)`;
+
+  // Backfill the additive many-to-many model from legacy commit ownership.
+  await sql`
+    INSERT INTO repository_commits (repository_id, commit_id)
+    SELECT repository_id, id
+    FROM commits
+    WHERE repository_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `;
+
+  await sql`
+    INSERT INTO repository_commits (repository_id, commit_id)
+    SELECT b.repository_id, c.id
+    FROM commits c
+    INNER JOIN branches b ON b.id = c.branch_id
+    WHERE b.repository_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `;
+
+  await sql`
+    INSERT INTO branch_commits (branch_id, commit_id)
+    SELECT branch_id, id
+    FROM commits
+    WHERE branch_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `;
 
   // Create indexes
   await sql`CREATE INDEX IF NOT EXISTS idx_repo_full_name ON repositories(full_name)`;
@@ -310,4 +556,14 @@ export async function createTables() {
   await sql`CREATE INDEX IF NOT EXISTS idx_merge_pr ON merge_events(pr_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_cpr_commit ON commit_pull_requests(commit_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_cpr_pr ON commit_pull_requests(pull_request_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_repository_commits_repository ON repository_commits(repository_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_repository_commits_commit ON repository_commits(commit_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_branch_commits_branch ON branch_commits(branch_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_branch_commits_commit ON branch_commits(commit_id)`;
+
+  await sql`
+    INSERT INTO schema_migrations (version)
+    VALUES (${CURRENT_SCHEMA_VERSION})
+    ON CONFLICT (version) DO NOTHING
+  `;
 }

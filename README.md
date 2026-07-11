@@ -55,6 +55,8 @@ pnpm dev
 
 ## Ingestion
 
+The ingest endpoint backfills every page of repositories, branches, branch histories, pull requests, and pull-request commits available to `GH_TOKEN`. By default it ingests the authenticated viewer's public repositories across owner, collaborator, and organization-member affiliations, includes forks, and traverses every branch.
+
 ```bash
 curl -X POST http://localhost:3000/api/ingest \
   -H "Content-Type: application/json" \
@@ -62,12 +64,49 @@ curl -X POST http://localhost:3000/api/ingest \
   -d '{"username": "Big-jpg"}'
 ```
 
+`username` is an optional safety check: when supplied, it must match the account that owns `GH_TOKEN`. It does not let one token read another user's private or organization data.
+
+Scope can be narrowed in the request body:
+
+```json
+{
+  "username": "Big-jpg",
+  "repositoryNames": ["Big-jpg/github-motion-graph"],
+  "visibility": "public",
+  "includeForks": false,
+  "affiliations": ["OWNER", "COLLABORATOR"],
+  "allBranches": false,
+  "branches": ["main", "release"]
+}
+```
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `username` | authenticated viewer | Optional check that the expected account owns `GH_TOKEN` |
+| `repositoryNames` | unset | Optional full `owner/name` allowlist for per-repository backfills and retries |
+| `visibility` | `public` | `public`, `private`, or `all`; GitHub treats internal repositories as private for this filter |
+| `includeForks` | `true` | Set `false` to exclude forks |
+| `affiliations` | all three | Any non-empty subset of `OWNER`, `COLLABORATOR`, `ORGANIZATION_MEMBER` |
+| `allBranches` | `true` | Set `false` to traverse only the default branch |
+| `branches` | unset | Optional branch-name allowlist; when present it overrides `allBranches` |
+
+The response reports expected and fetched connection counts, rows/links written, and a failure list. A fully complete run returns HTTP 200 with `success: true`; a run that completed only partially returns HTTP 207 with `success: false` and `status: "partial"`. GitHub requests use bounded retries for timeouts, transient failures, and short rate-limit waits.
+
+Deep all-repository/all-branch backfills can exceed a serverless request budget on large accounts. Use `repositoryNames` to run recoverable repository-sized chunks; the repository inventory is still fully paginated before the allowlist is applied.
+
+For private or organization repositories, the token must have access to those repositories and any required organization SSO authorization. Fine-grained tokens should grant repository metadata and contents plus pull-request read access. Repository visibility is never broadened beyond what the token can see.
+
+> [!WARNING]
+> `/api/graph` and `/api/stats` are public read endpoints. Do not ingest private repositories into a publicly accessible deployment unless you add authentication to those endpoints first.
+
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | Neon Postgres connection string |
-| `GH_TOKEN` | GitHub Personal Access Token |
+| `GH_TOKEN` | GitHub token whose authenticated viewer and accessible repositories will be ingested |
+| `GH_REQUEST_TIMEOUT_MS` | Optional per-request GitHub timeout; defaults to 20000 |
+| `GH_MAX_RETRIES` | Optional bounded retry count; defaults to 3 |
 | `INGEST_SECRET` | Shared secret required for `POST /api/ingest` |
 | `NEXT_PUBLIC_APP_URL` | Application URL |
 

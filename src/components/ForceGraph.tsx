@@ -1,38 +1,63 @@
-// src/components/ForceGraph.tsx
-'use client';
+"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
-import type { GraphData, ForceGraphNode, ForceGraphLink } from '@/lib/types';
-import type { GraphFilters } from './GraphControls';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import type {
+  ForceGraphMethods,
+  ForceGraphProps as ForceGraphLibraryProps,
+  LinkObject,
+  NodeObject,
+} from "react-force-graph-2d";
+import type { MutableRefObject, ReactElement } from "react";
+import type { ForceGraphLink, ForceGraphNode, GraphData } from "@/lib/types";
+import { CONTRIBUTOR_TYPES, NODE_TYPES } from "./GraphControls";
+import type { GraphFilters } from "./GraphControls";
 
-const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
+const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
+  ssr: false,
+});
 
-// Color palette
-const NODE_COLORS: Record<string, string> = {
-  repository: '#8b5cf6',   // violet
-  branch: '#06b6d4',       // cyan
-  commit: '#6b7280',       // gray
-  pullRequest: '#f59e0b',  // amber
-  user: '#10b981',         // emerald
+type NodeVisual = ForceGraphNode & {
+  color: string;
+  strokeColor: string;
+  size: number;
 };
 
-const BOT_COLOR = '#ec4899'; // pink for AI/bot contributors
-
-const EDGE_COLORS: Record<string, string> = {
-  AUTHORED: '#10b981',
-  OPENED: '#f59e0b',
-  MERGED: '#ec4899',
-  BELONGS_TO: '#374151',
-  TARGETS: '#6366f1',
-  FROM: '#8b5cf6',
-  PART_OF: '#4b5563',
+type LinkVisual = Omit<ForceGraphLink, "source" | "target"> & {
+  color: string;
 };
 
-const NODE_SIZES: Record<string, number> = {
+type TypedForceGraphProps = ForceGraphLibraryProps<NodeVisual, LinkVisual> & {
+  ref?: MutableRefObject<ForceGraphMethods<NodeVisual, LinkVisual> | undefined>;
+};
+
+const TypedForceGraph2D = ForceGraph2D as unknown as (
+  props: TypedForceGraphProps,
+) => ReactElement;
+
+const NODE_STYLES = Object.fromEntries(
+  NODE_TYPES.map(type => [type.key, { fill: type.fill, stroke: type.stroke }]),
+) as Record<ForceGraphNode["type"], { fill: string; stroke: string }>;
+
+const BOT_STYLE = CONTRIBUTOR_TYPES.find(type => type.key === "bot") ?? {
+  fill: "#e7ab9c",
+  stroke: "#965d51",
+};
+
+const EDGE_STYLES: Record<string, { color: string; dash?: number[] }> = {
+  AUTHORED: { color: "#4f8d7c" },
+  OPENED: { color: "#806b26", dash: [2, 3] },
+  MERGED: { color: "#965d51", dash: [6, 4] },
+  BELONGS_TO: { color: "#8ca498" },
+  TARGETS: { color: "#557f9d", dash: [4, 3] },
+  FROM: { color: "#735f91" },
+  PART_OF: { color: "#789086" },
+};
+
+const NODE_SIZES: Record<ForceGraphNode["type"], number> = {
   repository: 12,
-  branch: 6,
-  commit: 3,
+  branch: 7,
+  commit: 4,
   pullRequest: 8,
   user: 10,
 };
@@ -41,228 +66,380 @@ interface ForceGraphProps {
   data: GraphData;
   width: number;
   height: number;
+  selectedNodeId?: string | null;
   onNodeClick?: (node: ForceGraphNode) => void;
+  onBackgroundClick?: () => void;
   onVisibleCountChange?: (nodes: number, edges: number) => void;
   filters?: GraphFilters;
 }
 
-export default function ForceGraphVisualization({ data, width, height, onNodeClick, onVisibleCountChange, filters }: ForceGraphProps) {
-  const fgRef = useRef<any>(null);
-  const [hoveredNode, setHoveredNode] = useState<ForceGraphNode | null>(null);
-  const [selectedNode, setSelectedNode] = useState<ForceGraphNode | null>(null);
+function traceRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const left = x - width / 2;
+  const top = y - height / 2;
+  const right = left + width;
+  const bottom = top + height;
+
+  ctx.beginPath();
+  ctx.moveTo(left + radius, top);
+  ctx.lineTo(right - radius, top);
+  ctx.quadraticCurveTo(right, top, right, top + radius);
+  ctx.lineTo(right, bottom - radius);
+  ctx.quadraticCurveTo(right, bottom, right - radius, bottom);
+  ctx.lineTo(left + radius, bottom);
+  ctx.quadraticCurveTo(left, bottom, left, bottom - radius);
+  ctx.lineTo(left, top + radius);
+  ctx.quadraticCurveTo(left, top, left + radius, top);
+  ctx.closePath();
+}
+
+function traceNodeShape(
+  node: NodeObject<NodeVisual>,
+  ctx: CanvasRenderingContext2D,
+  size: number,
+) {
+  const x = node.x ?? 0;
+  const y = node.y ?? 0;
+
+  if (node.type === "repository") {
+    traceRoundedRect(ctx, x, y, size * 1.8, size * 1.35, size * 0.42);
+    return;
+  }
+
+  ctx.beginPath();
+  if (node.type === "branch") {
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size * 0.9, y + size * 0.75);
+    ctx.lineTo(x - size * 0.9, y + size * 0.75);
+    ctx.closePath();
+  } else if (node.type === "pullRequest") {
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size, y);
+    ctx.lineTo(x, y + size);
+    ctx.lineTo(x - size, y);
+    ctx.closePath();
+  } else {
+    ctx.arc(x, y, size, 0, 2 * Math.PI);
+  }
+}
+
+export default function ForceGraphVisualization({
+  data,
+  width,
+  height,
+  selectedNodeId = null,
+  onNodeClick,
+  onBackgroundClick,
+  onVisibleCountChange,
+  filters,
+}: ForceGraphProps) {
+  const fgRef = useRef<ForceGraphMethods<NodeVisual, LinkVisual> | undefined>(
+    undefined,
+  );
+  const [hoveredNode, setHoveredNode] = useState<NodeObject<NodeVisual> | null>(
+    null,
+  );
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const canvasFontFamily = useRef("ui-rounded, system-ui, sans-serif");
+
+  useEffect(() => {
+    canvasFontFamily.current = getComputedStyle(document.body).fontFamily;
+  }, []);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setReduceMotion(query.matches);
+    updatePreference();
+    query.addEventListener("change", updatePreference);
+    return () => query.removeEventListener("change", updatePreference);
+  }, []);
 
   const graphData = useMemo(() => {
     let filteredNodes = data.nodes;
 
     if (filters) {
       filteredNodes = data.nodes.filter(node => {
-        // Node type filter
         if (!filters.nodeTypes.has(node.type)) return false;
-
-        // Contributor type filter: applies to commits, PRs, and user nodes
-        if (node.contributorType) {
-          if (!filters.contributors.has(node.contributorType)) return false;
+        if (
+          node.contributorType &&
+          !filters.contributors.has(node.contributorType)
+        ) {
+          return false;
         }
-
-        // Repo/user specific filters (if set)
-        if (filters.repos.size > 0 && node.type === 'repository' && !filters.repos.has(node.label)) return false;
-        if (filters.users.size > 0 && node.type === 'user' && !filters.users.has(node.label)) return false;
-
+        if (
+          filters.repos.size > 0 &&
+          node.type === "repository" &&
+          !filters.repos.has(node.label)
+        ) {
+          return false;
+        }
+        if (
+          filters.users.size > 0 &&
+          node.type === "user" &&
+          !filters.users.has(node.label)
+        ) {
+          return false;
+        }
         return true;
       });
     }
 
-    const nodeIds = new Set(filteredNodes.map(n => n.id));
-
-    const filteredEdges = data.edges.filter(e =>
-      nodeIds.has(e.source) && nodeIds.has(e.target)
+    const nodeIds = new Set(filteredNodes.map(node => node.id));
+    const filteredEdges = data.edges.filter(
+      edge => nodeIds.has(edge.source) && nodeIds.has(edge.target),
     );
 
-    const nodes: ForceGraphNode[] = filteredNodes.map(node => ({
-      ...node,
-      color: node.type === 'user' && node.metadata.isBot ? BOT_COLOR : NODE_COLORS[node.type],
-      size: NODE_SIZES[node.type],
-    }));
+    const nodes: NodeVisual[] = filteredNodes.map(node => {
+      const isBot =
+        node.type === "user" &&
+        (node.metadata.isBot === true || node.contributorType === "bot");
+      const style = isBot ? BOT_STYLE : NODE_STYLES[node.type];
+      return {
+        ...node,
+        color: style.fill,
+        strokeColor: style.stroke,
+        size: NODE_SIZES[node.type],
+      };
+    });
 
-    const links: ForceGraphLink[] = filteredEdges.map(edge => ({
+    const links: LinkObject<NodeVisual, LinkVisual>[] = filteredEdges.map(edge => ({
       ...edge,
-      color: EDGE_COLORS[edge.type] || '#374151',
+      color: EDGE_STYLES[edge.type]?.color ?? "#8ca498",
     }));
 
     return { nodes, links };
   }, [data, filters]);
 
-  // Report visible counts back to parent
   useEffect(() => {
     onVisibleCountChange?.(graphData.nodes.length, graphData.links.length);
   }, [graphData, onVisibleCountChange]);
 
-  const handleNodeClick = useCallback((node: any) => {
-    setSelectedNode(node);
-    onNodeClick?.(node);
+  const handleNodeClick = useCallback(
+    (node: NodeObject<NodeVisual>) => {
+      onNodeClick?.(node);
+      if (fgRef.current && node.x != null && node.y != null) {
+        const duration = reduceMotion ? 0 : 500;
+        fgRef.current.centerAt(node.x, node.y, duration);
+        fgRef.current.zoom(3, duration);
+      }
+    },
+    [onNodeClick, reduceMotion],
+  );
 
-    // Center on node
-    if (fgRef.current) {
-      fgRef.current.centerAt(node.x, node.y, 800);
-      fgRef.current.zoom(3, 800);
-    }
-  }, [onNodeClick]);
+  const paintNode = useCallback(
+    (
+      node: NodeObject<NodeVisual>,
+      ctx: CanvasRenderingContext2D,
+      globalScale: number,
+    ) => {
+      const size = node.size ?? 5;
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
+      const isHovered = hoveredNode?.id === node.id;
+      const isSelected = selectedNodeId === node.id;
+      const scale = isHovered ? 1.18 : isSelected ? 1.12 : 1;
+      const renderedSize = size * scale;
 
-  const handleNodeHover = useCallback((node: any) => {
-    setHoveredNode(node || null);
-    document.body.style.cursor = node ? 'pointer' : 'default';
-  }, []);
-
-  const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const size = node.size || 5;
-    const isHovered = hoveredNode?.id === node.id;
-    const isSelected = selectedNode?.id === node.id;
-    const scale = isHovered ? 1.5 : isSelected ? 1.3 : 1;
-
-    ctx.save();
-
-    // Glow effect
-    if (isHovered || isSelected || node.type === 'repository') {
-      ctx.shadowColor = node.color || '#fff';
-      ctx.shadowBlur = isHovered ? 20 : isSelected ? 15 : 8;
-    }
-
-    if (node.type === 'pullRequest') {
-      // Diamond shape for PRs
-      const s = size * scale;
-      ctx.beginPath();
-      ctx.moveTo(node.x, node.y - s);
-      ctx.lineTo(node.x + s, node.y);
-      ctx.lineTo(node.x, node.y + s);
-      ctx.lineTo(node.x - s, node.y);
-      ctx.closePath();
+      ctx.save();
+      traceNodeShape(node, ctx, renderedSize);
       ctx.fillStyle = node.color;
       ctx.fill();
-    } else if (node.type === 'user') {
-      // Circle with ring for users
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, size * scale, 0, 2 * Math.PI);
-      ctx.fillStyle = node.color;
-      ctx.fill();
+      ctx.strokeStyle = node.strokeColor;
+      ctx.lineWidth = (isHovered || isSelected ? 3 : 2) / globalScale;
+      ctx.stroke();
 
-      // Bot indicator ring
-      if (node.metadata?.isBot) {
-        ctx.strokeStyle = '#ec4899';
-        ctx.lineWidth = 2 / globalScale;
+      if (node.type === "user") {
+        ctx.beginPath();
+        ctx.arc(x, y, renderedSize * 0.5, 0, 2 * Math.PI);
+        ctx.strokeStyle = node.strokeColor;
+        ctx.lineWidth = 1.5 / globalScale;
         ctx.stroke();
 
-        // Inner pulse ring
+        if (node.metadata.isBot === true || node.contributorType === "bot") {
+          ctx.beginPath();
+          ctx.arc(x, y, renderedSize * 1.35, 0, 2 * Math.PI);
+          ctx.setLineDash([3 / globalScale, 2.5 / globalScale]);
+          ctx.strokeStyle = BOT_STYLE.stroke;
+          ctx.lineWidth = 1.5 / globalScale;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      if (isSelected || isHovered) {
+        const ringRadius = renderedSize * 1.65 + 3 / globalScale;
         ctx.beginPath();
-        ctx.arc(node.x, node.y, size * scale * 1.4, 0, 2 * Math.PI);
-        ctx.strokeStyle = 'rgba(236, 72, 153, 0.3)';
-        ctx.lineWidth = 1 / globalScale;
+        ctx.arc(x, y, ringRadius, 0, 2 * Math.PI);
+        ctx.strokeStyle = isSelected ? "#2d3a32" : node.strokeColor;
+        ctx.lineWidth = (isSelected ? 2 : 1.5) / globalScale;
         ctx.stroke();
       }
-    } else {
-      // Circle for other nodes
+
+      const showLabel =
+        isHovered ||
+        isSelected ||
+        (globalScale > 1.25 &&
+          (node.type === "repository" || node.type === "user"));
+
+      if (showLabel) {
+        const label =
+          node.label.length > 38 ? `${node.label.slice(0, 35)}…` : node.label;
+        const fontSize = 12 / globalScale;
+        ctx.font = `800 ${fontSize}px ${canvasFontFamily.current}`;
+        const labelWidth = ctx.measureText(label).width;
+        const horizontalPadding = 6 / globalScale;
+        const labelHeight = 21 / globalScale;
+        const labelY = y + renderedSize + 13 / globalScale;
+
+        traceRoundedRect(
+          ctx,
+          x,
+          labelY,
+          labelWidth + horizontalPadding * 2,
+          labelHeight,
+          7 / globalScale,
+        );
+        ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+        ctx.fill();
+        ctx.strokeStyle = "#dfeae2";
+        ctx.lineWidth = 1 / globalScale;
+        ctx.stroke();
+        ctx.fillStyle = "#2d3a32";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x, labelY + 0.5 / globalScale);
+      }
+
+      ctx.restore();
+    },
+    [hoveredNode, selectedNodeId],
+  );
+
+  const paintLink = useCallback(
+    (
+      link: LinkObject<NodeVisual, LinkVisual>,
+      ctx: CanvasRenderingContext2D,
+      globalScale: number,
+    ) => {
+      if (typeof link.source !== "object" || typeof link.target !== "object") {
+        return;
+      }
+
+      const start = link.source;
+      const end = link.target;
+      if (start.x == null || start.y == null || end.x == null || end.y == null) {
+        return;
+      }
+
+      const style = EDGE_STYLES[link.type] ?? { color: "#8ca498" };
+      ctx.save();
       ctx.beginPath();
-      ctx.arc(node.x, node.y, size * scale, 0, 2 * Math.PI);
-      ctx.fillStyle = node.color;
-      ctx.fill();
-    }
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      if (style.dash) {
+        ctx.setLineDash(style.dash.map(value => value / globalScale));
+      }
+      ctx.strokeStyle = link.color || style.color;
+      ctx.globalAlpha = Math.min(0.62, 0.24 + (link.weight ?? 1) * 0.08);
+      ctx.lineWidth = Math.max(1, (link.weight ?? 1) * 0.55) / globalScale;
+      ctx.stroke();
+      ctx.restore();
+    },
+    [],
+  );
 
-    // Label for larger nodes when zoomed in
-    if (globalScale > 1.5 && (node.type === 'repository' || node.type === 'user' || (isHovered && globalScale > 2))) {
-      ctx.shadowBlur = 0;
-      ctx.font = `${10 / globalScale}px monospace`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-      ctx.fillText(node.label, node.x, node.y + size * scale + 2);
-    }
-
-    ctx.restore();
-  }, [hoveredNode, selectedNode]);
-
-  const paintLink = useCallback((link: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const start = link.source;
-    const end = link.target;
-
-    if (!start.x || !end.x) return;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(start.x, start.y);
-    ctx.lineTo(end.x, end.y);
-
-    const opacity = Math.min(0.6, link.weight * 0.2);
-    ctx.strokeStyle = link.color || 'rgba(55, 65, 81, 0.3)';
-    ctx.globalAlpha = opacity;
-    ctx.lineWidth = Math.max(0.5, link.weight * 0.5) / globalScale;
-    ctx.stroke();
-    ctx.restore();
-  }, []);
-
-  // Auto-zoom to fit on data change
   useEffect(() => {
-    if (fgRef.current && graphData.nodes.length > 0) {
-      setTimeout(() => {
-        fgRef.current?.zoomToFit(400, 50);
-      }, 500);
-    }
-  }, [graphData]);
+    if (!fgRef.current || graphData.nodes.length === 0) return;
 
-  if (typeof window === 'undefined') return null;
+    const timer = window.setTimeout(
+      () => {
+        fgRef.current?.zoomToFit(reduceMotion ? 0 : 400, 64);
+      },
+      reduceMotion ? 0 : 450,
+    );
+    return () => window.clearTimeout(timer);
+  }, [graphData, reduceMotion]);
 
   return (
-    <div className="relative w-full h-full">
-      <ForceGraph2D
+    <section
+      className="relative h-full w-full"
+      role="img"
+      aria-label={`Interactive GitHub activity graph with ${graphData.nodes.length} visible nodes and ${graphData.links.length} visible relationships.`}
+    >
+      <p className="sr-only">
+        Use the filter controls to change what is shown. Select a node with a
+        pointer to inspect its metadata.
+      </p>
+      <TypedForceGraph2D
         ref={fgRef}
         graphData={graphData}
         width={width}
         height={height}
-        backgroundColor="#09090b"
+        backgroundColor="#f5f9f6"
         nodeCanvasObject={paintNode}
-        nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
-          const size = (node.size || 5) * 2;
+        nodePointerAreaPaint={(node, color, ctx, globalScale) => {
+          const visualNode = node as NodeObject<NodeVisual>;
+          const radius = Math.max((visualNode.size ?? 5) * 1.75, 22 / globalScale);
           ctx.beginPath();
-          ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+          ctx.arc(visualNode.x ?? 0, visualNode.y ?? 0, radius, 0, 2 * Math.PI);
           ctx.fillStyle = color;
           ctx.fill();
         }}
         linkCanvasObject={paintLink}
         onNodeClick={handleNodeClick}
-        onNodeHover={handleNodeHover}
-        d3AlphaDecay={0.02}
-        d3VelocityDecay={0.3}
+        onNodeHover={node => setHoveredNode(node as NodeObject<NodeVisual> | null)}
+        onBackgroundClick={() => onBackgroundClick?.()}
+        showPointerCursor
+        d3AlphaDecay={0.025}
+        d3VelocityDecay={0.34}
         warmupTicks={50}
         cooldownTicks={100}
-        enableNodeDrag={true}
-        enableZoomInteraction={true}
-        enablePanInteraction={true}
+        enableNodeDrag
+        enableZoomInteraction
+        enablePanInteraction
       />
 
-      {/* Tooltip */}
-      {hoveredNode && (
-        <div className="absolute top-4 right-4 bg-zinc-900/95 border border-zinc-700 rounded-lg p-4 max-w-xs backdrop-blur-sm">
-          <div className="flex items-center gap-2 mb-2">
+      {hoveredNode && !selectedNodeId && (
+        <aside className="pastel-panel pointer-events-none absolute inset-x-3 top-20 z-20 max-h-[45svh] overflow-hidden p-4 sm:inset-x-auto sm:top-4 sm:right-4 sm:w-80">
+          <div className="flex items-center gap-2.5">
             <span
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: hoveredNode.color }}
+              aria-hidden="true"
+              className="size-4 rounded-full border-2"
+              style={{
+                backgroundColor: hoveredNode.color,
+                borderColor: hoveredNode.strokeColor,
+              }}
             />
-            <span className="text-xs font-mono uppercase text-zinc-400">{hoveredNode.type}</span>
+            <span className="text-[0.68rem] font-black uppercase tracking-[0.13em] text-muted-foreground">
+              {hoveredNode.type}
+            </span>
           </div>
-          <p className="text-sm font-medium text-zinc-100">{hoveredNode.label}</p>
+          <p className="mt-2 font-display text-lg font-medium leading-tight text-foreground">
+            {hoveredNode.label}
+          </p>
           {hoveredNode.metadata && (
-            <div className="mt-2 space-y-1">
+            <dl className="mt-3 space-y-1.5 border-t-2 border-border pt-3 font-mono text-[0.68rem]">
               {Object.entries(hoveredNode.metadata).map(([key, value]) => {
-                if (!value || key === 'avatarUrl') return null;
+                if (value == null || value === "" || key === "avatarUrl") return null;
                 return (
-                  <p key={key} className="text-xs text-zinc-400">
-                    <span className="text-zinc-500">{key}:</span>{' '}
-                    {String(value).substring(0, 60)}
-                  </p>
+                  <div key={key} className="grid grid-cols-[auto_1fr] gap-3">
+                    <dt className="text-muted-foreground">{key}</dt>
+                    <dd className="truncate text-right text-foreground">
+                      {String(value).slice(0, 72)}
+                    </dd>
+                  </div>
                 );
               })}
-            </div>
+            </dl>
           )}
-        </div>
+        </aside>
       )}
-    </div>
+    </section>
   );
 }

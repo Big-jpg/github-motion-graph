@@ -18,6 +18,32 @@ export interface GraphEdge {
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  meta?: GraphResponseMeta;
+}
+
+export interface GraphResponseMeta {
+  filters: {
+    repo: string | null;
+    user: string | null;
+  };
+  limits: {
+    commits: number | null;
+    pullRequests: number | null;
+  };
+  totals: GraphEntityCounts;
+  returned: GraphEntityCounts;
+  complete: {
+    commits: boolean;
+    pullRequests: boolean;
+  };
+}
+
+export interface GraphEntityCounts {
+  repositories: number;
+  branches: number;
+  commits: number;
+  pullRequests: number;
+  users: number;
 }
 
 export interface ForceGraphNode {

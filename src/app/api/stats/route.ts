@@ -37,9 +37,20 @@ export async function GET() {
     `;
 
     const repoActivity = await sql`
-      SELECT r.name, COUNT(c.id) as commit_count, COUNT(DISTINCT pr.id) as pr_count
+      WITH repo_commit_memberships AS (
+        SELECT repository_id, commit_id
+        FROM repository_commits
+        UNION
+        SELECT repository_id, id AS commit_id
+        FROM commits
+        WHERE repository_id IS NOT NULL
+      )
+      SELECT
+        r.name,
+        COUNT(DISTINCT memberships.commit_id) as commit_count,
+        COUNT(DISTINCT pr.id) as pr_count
       FROM repositories r
-      LEFT JOIN commits c ON c.repository_id = r.id
+      LEFT JOIN repo_commit_memberships memberships ON memberships.repository_id = r.id
       LEFT JOIN pull_requests pr ON pr.repository_id = r.id
       GROUP BY r.id, r.name
       ORDER BY commit_count DESC

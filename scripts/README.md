@@ -21,6 +21,11 @@ VERCEL_TOKEN=xxx ./scripts/pull-vercel-env.sh --env production
 
 # Run ingest against production using the INGEST_SECRET provided by prod
 INGEST_SECRET=yyy ./scripts/ingest.sh Big-jpg
+
+# Narrow the default public/all-affiliations/all-branches scope with a raw body
+INGEST_SECRET=yyy \
+INGEST_BODY='{"username":"Big-jpg","includeForks":false,"allBranches":false}' \
+./scripts/ingest.sh Big-jpg
 ```
 
 PowerShell:
@@ -30,4 +35,17 @@ $env:VERCEL_TOKEN='xxx'
 ./scripts/pull-vercel-env.ps1 -Environment production
 $env:INGEST_SECRET='yyy'
 ./scripts/ingest.ps1 -Username Big-jpg
+
+# Public owner repos only, without forks, traversing just main
+./scripts/ingest.ps1 -Username Big-jpg `
+  -RepositoryNames Big-jpg/github-motion-graph `
+  -Affiliations OWNER `
+  -ExcludeForks `
+  -Branches main
 ```
+
+The username is an optional safety check in the PowerShell script and is included by the Bash helper. It must match the authenticated viewer for the server-side `GH_TOKEN`. The token determines which repositories can actually be read; private and organization repositories require matching token access and organization authorization.
+
+The endpoint defaults to public repositories across `OWNER`, `COLLABORATOR`, and `ORGANIZATION_MEMBER`, includes forks, and traverses all branches. See the root README for the complete request schema and partial-run response format.
+
+Both helpers exit non-zero for partial (`HTTP 207`) and failed runs so they are safe to use in scheduled jobs.

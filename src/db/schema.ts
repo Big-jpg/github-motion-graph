@@ -1,5 +1,10 @@
 // src/db/schema.ts
-import { pgTable, text, integer, boolean, timestamp, serial, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, boolean, timestamp, serial, index, uniqueIndex } from 'drizzle-orm/pg-core';
+
+export const schemaMigrations = pgTable('schema_migrations', {
+  version: text('version').primaryKey(),
+  appliedAt: timestamp('applied_at').defaultNow().notNull(),
+});
 
 export const repositories = pgTable('repositories', {
   id: serial('id').primaryKey(),
@@ -14,6 +19,9 @@ export const repositories = pgTable('repositories', {
   pushedAt: timestamp('pushed_at'),
   stargazerCount: integer('stargazer_count').default(0),
   language: text('language'),
+  ownerLogin: text('owner_login'),
+  isFork: boolean('is_fork').default(false),
+  isPrivate: boolean('is_private').default(false),
 }, (table) => [
   index('idx_repo_full_name').on(table.fullName),
 ]);
@@ -26,6 +34,7 @@ export const branches = pgTable('branches', {
   createdAt: timestamp('created_at'),
 }, (table) => [
   index('idx_branch_repo').on(table.repositoryId),
+  uniqueIndex('branches_repository_name_unique').on(table.repositoryId, table.name),
 ]);
 
 export const users = pgTable('users', {
@@ -66,6 +75,7 @@ export const pullRequests = pgTable('pull_requests', {
   additions: integer('additions').default(0),
   deletions: integer('deletions').default(0),
   headBranch: text('head_branch'),
+  headRepositoryFullName: text('head_repository_full_name'),
   baseBranch: text('base_branch'),
   repositoryId: integer('repository_id').notNull().references(() => repositories.id, { onDelete: 'cascade' }),
   authorId: integer('author_id').references(() => users.id, { onDelete: 'set null' }),
@@ -83,6 +93,7 @@ export const mergeEvents = pgTable('merge_events', {
 }, (table) => [
   index('idx_merge_repo').on(table.repositoryId),
   index('idx_merge_pr').on(table.prId),
+  uniqueIndex('merge_events_pr_unique').on(table.prId),
 ]);
 
 export const commitPullRequests = pgTable('commit_pull_requests', {
@@ -92,4 +103,28 @@ export const commitPullRequests = pgTable('commit_pull_requests', {
 }, (table) => [
   index('idx_cpr_commit').on(table.commitId),
   index('idx_cpr_pr').on(table.pullRequestId),
+  uniqueIndex('commit_pull_requests_commit_pr_unique').on(table.commitId, table.pullRequestId),
+]);
+
+// A Git commit object can be reachable from many repositories (especially forks)
+// and many branches. Keep the legacy repositoryId/branchId columns on commits
+// during the transition, while these junctions provide the lossless model.
+export const repositoryCommits = pgTable('repository_commits', {
+  id: serial('id').primaryKey(),
+  repositoryId: integer('repository_id').notNull().references(() => repositories.id, { onDelete: 'cascade' }),
+  commitId: integer('commit_id').notNull().references(() => commits.id, { onDelete: 'cascade' }),
+}, (table) => [
+  index('idx_repository_commits_repository').on(table.repositoryId),
+  index('idx_repository_commits_commit').on(table.commitId),
+  uniqueIndex('repository_commits_repository_commit_unique').on(table.repositoryId, table.commitId),
+]);
+
+export const branchCommits = pgTable('branch_commits', {
+  id: serial('id').primaryKey(),
+  branchId: integer('branch_id').notNull().references(() => branches.id, { onDelete: 'cascade' }),
+  commitId: integer('commit_id').notNull().references(() => commits.id, { onDelete: 'cascade' }),
+}, (table) => [
+  index('idx_branch_commits_branch').on(table.branchId),
+  index('idx_branch_commits_commit').on(table.commitId),
+  uniqueIndex('branch_commits_branch_commit_unique').on(table.branchId, table.commitId),
 ]);
