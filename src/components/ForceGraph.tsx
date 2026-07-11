@@ -147,41 +147,42 @@ function contractHiddenCommits(
 
 type SemanticForce = ((alpha: number) => void) & {
   initialize: (nodes: NodeVisual[]) => void;
-  advanceWave: () => void;
+  advanceLocomotion: () => void;
 };
 
-function createSemanticForce(
-  cohesion: number,
-  separation: number,
-  motion: number,
-): SemanticForce {
+function createSemanticForce(locomotion: boolean): SemanticForce {
   let nodes: NodeVisual[] = [];
-  let phase = 0;
+  const orbits = new Map<string, {
+    originX: number;
+    originY: number;
+    phase: number;
+    radius: number;
+    direction: number;
+    spiral: number;
+  }>();
   const force = ((alpha: number) => {
     if (nodes.length === 0) return;
 
-    if (cohesion > 0) {
-      const centers = new Map<string, { x: number; y: number; count: number }>();
-      for (const node of nodes) {
-        const center = centers.get(node.type) ?? { x: 0, y: 0, count: 0 };
-        center.x += node.x ?? 0;
-        center.y += node.y ?? 0;
-        center.count++;
-        centers.set(node.type, center);
-      }
-      const strength = (cohesion / 100) * 0.012 * alpha;
-      for (const node of nodes) {
-        const center = centers.get(node.type);
-        if (!center || center.count < 2) continue;
-        node.vx = (node.vx ?? 0) + (center.x / center.count - (node.x ?? 0)) * strength;
-        node.vy = (node.vy ?? 0) + (center.y / center.count - (node.y ?? 0)) * strength;
-      }
+    const centers = new Map<string, { x: number; y: number; count: number }>();
+    for (const node of nodes) {
+      const center = centers.get(node.type) ?? { x: 0, y: 0, count: 0 };
+      center.x += node.x ?? 0;
+      center.y += node.y ?? 0;
+      center.count++;
+      centers.set(node.type, center);
+    }
+    const cohesionStrength = 0.0028 * alpha;
+    for (const node of nodes) {
+      const center = centers.get(node.type);
+      if (!center || center.count < 2) continue;
+      node.vx = (node.vx ?? 0) + (center.x / center.count - (node.x ?? 0)) * cohesionStrength;
+      node.vy = (node.vy ?? 0) + (center.y / center.count - (node.y ?? 0)) * cohesionStrength;
     }
 
-    if (separation > 0) {
+    {
       const cellSize = 34;
       const buckets = new Map<string, NodeVisual[]>();
-      const strength = (separation / 100) * 0.42 * alpha;
+      const strength = 0.17 * alpha;
       for (const node of nodes) {
         const x = node.x ?? 0;
         const y = node.y ?? 0;
@@ -221,18 +222,39 @@ function createSemanticForce(
       }
     }
 
-    if (motion > 0) {
-      const strength = (motion / 100) * 0.55 * alpha;
+    if (locomotion) {
       for (const node of nodes) {
-        const x = node.x ?? 0;
-        const y = node.y ?? 0;
-        node.vx = (node.vx ?? 0) + Math.sin(y * 0.012 + phase) * strength;
-        node.vy = (node.vy ?? 0) + Math.cos(x * 0.01 - phase * 0.8) * strength * 0.7;
+        if (node.type !== "user") continue;
+        const orbit = orbits.get(node.id);
+        if (!orbit) continue;
+        const breathingRadius = orbit.radius * (1 + Math.sin(orbit.phase * 0.45) * orbit.spiral);
+        const targetX = orbit.originX + Math.cos(orbit.phase) * breathingRadius;
+        const targetY = orbit.originY + Math.sin(orbit.phase) * breathingRadius * 0.72;
+        const lerpStrength = 0.018 * alpha;
+        node.vx = (node.vx ?? 0) + (targetX - (node.x ?? 0)) * lerpStrength;
+        node.vy = (node.vy ?? 0) + (targetY - (node.y ?? 0)) * lerpStrength;
       }
     }
   }) as SemanticForce;
-  force.initialize = nextNodes => { nodes = nextNodes; };
-  force.advanceWave = () => { phase += 0.55; };
+  force.initialize = nextNodes => {
+    nodes = nextNodes;
+    for (const node of nodes) {
+      if (node.type !== "user" || orbits.has(node.id)) continue;
+      orbits.set(node.id, {
+        originX: node.x ?? 0,
+        originY: node.y ?? 0,
+        phase: Math.random() * Math.PI * 2,
+        radius: 8 + Math.random() * 18,
+        direction: Math.random() > 0.5 ? 1 : -1,
+        spiral: 0.05 + Math.random() * 0.16,
+      });
+    }
+  };
+  force.advanceLocomotion = () => {
+    for (const orbit of orbits.values()) {
+      orbit.phase += (0.08 + orbit.radius * 0.0015) * orbit.direction;
+    }
+  };
   return force;
 }
 
@@ -406,11 +428,9 @@ export default function ForceGraphVisualization({
   const dynamics = filters?.dynamics ?? DEFAULT_DYNAMICS;
   const semanticForce = useMemo(
     () => createSemanticForce(
-      dynamics.cohesion,
-      dynamics.separation,
-      reduceMotion || lodLevel === "detail" ? 0 : dynamics.motion,
+      dynamics.locomotion && !reduceMotion && lodLevel !== "detail",
     ),
-    [dynamics.cohesion, dynamics.motion, dynamics.separation, lodLevel, reduceMotion],
+    [dynamics.locomotion, lodLevel, reduceMotion],
   );
 
   const fitSignature = useMemo(
@@ -436,13 +456,13 @@ export default function ForceGraphVisualization({
   }, [graphData, semanticForce]);
 
   useEffect(() => {
-    if (reduceMotion || lodLevel === "detail" || dynamics.motion === 0) return;
+    if (reduceMotion || lodLevel === "detail" || !dynamics.locomotion) return;
     const timer = window.setInterval(() => {
-      semanticForce.advanceWave();
+      semanticForce.advanceLocomotion();
       fgRef.current?.d3ReheatSimulation();
-    }, 1800);
+    }, 650);
     return () => window.clearInterval(timer);
-  }, [dynamics.motion, lodLevel, reduceMotion, semanticForce]);
+  }, [dynamics.locomotion, lodLevel, reduceMotion, semanticForce]);
 
   const handleNodeClick = useCallback(
     (node: NodeObject<NodeVisual>) => {

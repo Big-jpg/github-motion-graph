@@ -57,15 +57,11 @@ export const CONTRIBUTOR_TYPES = [
 ] as const;
 
 export interface GraphDynamics {
-  cohesion: number;
-  separation: number;
-  motion: number;
+  locomotion: boolean;
 }
 
 export const DEFAULT_DYNAMICS: GraphDynamics = {
-  cohesion: 22,
-  separation: 38,
-  motion: 12,
+  locomotion: true,
 };
 
 export interface GraphFilters {
@@ -135,8 +131,8 @@ export default function GraphControls({
     });
   };
 
-  const updateDynamics = (key: keyof GraphDynamics, value: number) => {
-    const next = { ...dynamics, [key]: value };
+  const toggleLocomotion = () => {
+    const next = { locomotion: !dynamics.locomotion };
     setDynamics(next);
     emitFilters(activeTypes, activeContributors, connectionsVisible, next);
   };
@@ -183,9 +179,7 @@ export default function GraphControls({
     activeTypes.size === NODE_TYPES.length &&
     activeContributors.size === CONTRIBUTOR_TYPES.length &&
     connectionsVisible &&
-    dynamics.cohesion === DEFAULT_DYNAMICS.cohesion &&
-    dynamics.separation === DEFAULT_DYNAMICS.separation &&
-    dynamics.motion === DEFAULT_DYNAMICS.motion;
+    dynamics.locomotion === DEFAULT_DYNAMICS.locomotion;
 
   return (
     <div
@@ -379,35 +373,29 @@ export default function GraphControls({
             <p className="px-2 pb-2 text-[0.68rem] font-black uppercase tracking-[0.14em] text-muted-foreground">
               Graph dynamics
             </p>
-            <div className="space-y-3 rounded-2xl bg-secondary/70 px-3 py-3">
-              {([
-                ["cohesion", "Type cohesion", "Gather similar node types"],
-                ["separation", "Separation", "Keep unlike nodes apart"],
-                ["motion", "Background wave", "Periodic directional pressure"],
-              ] as const).map(([key, label, description]) => (
-                <label key={key} className="block">
-                  <span className="flex items-center justify-between gap-3 text-xs font-extrabold">
-                    <span>{label}</span>
-                    <span className="font-mono text-[0.68rem] text-muted-foreground">
-                      {dynamics[key]}
-                    </span>
-                  </span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={dynamics[key]}
-                    onChange={event => updateDynamics(key, Number(event.target.value))}
-                    aria-label={label}
-                    className="mt-1 h-5 w-full cursor-pointer accent-[#65a897]"
-                  />
-                  <span className="block text-[0.65rem] font-semibold text-muted-foreground">
-                    {description}
-                  </span>
-                </label>
-              ))}
-            </div>
+            <button
+              type="button"
+              aria-pressed={dynamics.locomotion}
+              onClick={toggleLocomotion}
+              className={`flex min-h-11 w-full items-center gap-3 rounded-2xl border-2 px-3 text-left transition-colors ${
+                dynamics.locomotion
+                  ? "border-border bg-secondary text-foreground"
+                  : "border-transparent text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 12a8 8 0 1 0 3-6.25" />
+                <path d="M4 5v5h5" />
+                <circle cx="12" cy="12" r="2" />
+              </svg>
+              <span className="text-sm font-extrabold">Contributor locomotion</span>
+              <span className="ml-auto font-mono text-[0.7rem] font-semibold text-muted-foreground">
+                {dynamics.locomotion ? "On" : "Off"}
+              </span>
+            </button>
+            <p className="px-3 pt-1.5 text-[0.68rem] font-semibold leading-4 text-muted-foreground">
+              Humans and bots follow small independent orbits. Cohesion and separation remain automatic.
+            </p>
           </div>
 
           <div
