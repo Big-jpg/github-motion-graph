@@ -64,15 +64,39 @@ async function ingestRepository(payload: Record<string, unknown>) {
 export const POST = handleCallback<IngestMessage>(async (message, metadata) => {
   const job = await claimJob(message.jobId);
   if (!job) return; // completed jobs make duplicate deliveries harmless
+  console.info('ingestion.job.started', {
+    runId: message.runId,
+    jobId: message.jobId,
+    kind: job.kind,
+    dedupeKey: job.dedupe_key,
+    deliveryCount: metadata.deliveryCount,
+    messageId: metadata.messageId,
+  });
   try {
     const payload = (job.payload || {}) as Record<string, unknown>;
     const result = job.kind === 'discover'
       ? await discover(message.runId, payload)
       : await ingestRepository(payload);
     await completeJob(message.jobId, result);
+    console.info('ingestion.job.completed', {
+      runId: message.runId,
+      jobId: message.jobId,
+      dedupeKey: job.dedupe_key,
+      deliveryCount: metadata.deliveryCount,
+      messageId: metadata.messageId,
+    });
   } catch (error) {
     const terminal = metadata.deliveryCount >= 5;
     await retryJob(message.jobId, error, terminal);
+    console.error('ingestion.job.failed', {
+      runId: message.runId,
+      jobId: message.jobId,
+      dedupeKey: job.dedupe_key,
+      deliveryCount: metadata.deliveryCount,
+      messageId: metadata.messageId,
+      terminal,
+      error: error instanceof Error ? error.message : String(error),
+    });
     if (!terminal) throw error;
   }
 }, { visibilityTimeoutSeconds: 300 });

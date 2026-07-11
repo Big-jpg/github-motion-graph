@@ -123,7 +123,19 @@ export async function getRun(runId: string) {
     SELECT id, kind, dedupe_key, status, attempts, last_error, result, created_at, started_at, updated_at, completed_at
     FROM ingestion_jobs WHERE run_id = ${runId} ORDER BY created_at ASC
   `;
-  return { ...runs[0], jobs };
+  const now = Date.now();
+  const observableJobs = jobs.map((job) => {
+    const updatedAt = Date.parse(String(job.updated_at));
+    const leaseAgeSeconds = Number.isFinite(updatedAt) ? Math.max(0, Math.floor((now - updatedAt) / 1_000)) : null;
+    let health = job.status;
+    if (job.status === 'running') {
+      health = leaseAgeSeconds !== null && leaseAgeSeconds > 330 ? 'stale-lease' : 'in-flight';
+    } else if (job.status === 'retrying') {
+      health = 'waiting-for-retry';
+    }
+    return { ...job, health, lease_age_seconds: leaseAgeSeconds };
+  });
+  return { ...runs[0], jobs: observableJobs };
 }
 
 function message(error: unknown) {

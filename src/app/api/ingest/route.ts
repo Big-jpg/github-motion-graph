@@ -41,6 +41,9 @@ interface IngestOptions {
   branches: Set<string> | null;
   repositoryNames: Set<string> | null;
   affiliations: string[];
+  forkMode: 'shallow' | 'full';
+  forkCommitPages: number;
+  forkPullRequestPages: number;
 }
 
 interface IngestFailure {
@@ -203,6 +206,15 @@ function readBoolean(record: Record<string, unknown>, key: string, fallback: boo
   return value;
 }
 
+function readPositiveInteger(record: Record<string, unknown>, key: string, fallback: number): number {
+  const value = record[key];
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100) {
+    throw new Error(`${key} must be an integer between 1 and 100`);
+  }
+  return Number(value);
+}
+
 function parseOptions(body: unknown): IngestOptions {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new Error('Request body must be a JSON object');
@@ -225,6 +237,10 @@ function parseOptions(body: unknown): IngestOptions {
     throw new Error('visibility must be public, private, or all');
   }
   const visibility = visibilityValue.toLowerCase() as Visibility;
+  const forkModeValue = record.forkMode ?? 'shallow';
+  if (forkModeValue !== 'shallow' && forkModeValue !== 'full') {
+    throw new Error('forkMode must be shallow or full');
+  }
 
   let branches: Set<string> | null = null;
   if (record.branches !== undefined) {
@@ -277,6 +293,9 @@ function parseOptions(body: unknown): IngestOptions {
     branches,
     repositoryNames,
     affiliations: [...new Set(affiliations)],
+    forkMode: forkModeValue,
+    forkCommitPages: readPositiveInteger(record, 'forkCommitPages', 2),
+    forkPullRequestPages: readPositiveInteger(record, 'forkPullRequestPages', 1),
   };
 }
 
@@ -530,6 +549,23 @@ async function ingestBranches(
   const branchIds = new Map<string, number>();
   const owner = repo.owner.login;
 
+  if (repo.isFork && context.options.forkMode === 'shallow' && !context.options.branches) {
+    const defaultBranch = repo.defaultBranchRef?.name;
+    if (!defaultBranch) return branchIds;
+    const persisted = await context.db
+      .insert(schema.branches)
+      .values({ name: defaultBranch, repositoryId, isDefault: true })
+      .onConflictDoUpdate({
+        target: [schema.branches.repositoryId, schema.branches.name],
+        set: { isDefault: true },
+      })
+      .returning({ id: schema.branches.id, name: schema.branches.name });
+    if (persisted[0]) branchIds.set(persisted[0].name, persisted[0].id);
+    context.stats.fetched.branches++;
+    context.stats.written.branchUpserts += persisted.length;
+    return branchIds;
+  }
+
   try {
     for await (const page of githubGraphQLPages<BranchesData, BranchNode>(
       BRANCHES_QUERY,
@@ -599,6 +635,11 @@ async function ingestBranchHistories(
         }
         context.stats.fetched.branchCommitMemberships += page.nodes.length;
         await persistCommitPage(context, page.nodes, repositoryId, branchId);
+        if (
+          repo.isFork &&
+          context.options.forkMode === 'shallow' &&
+          page.pageNumber >= context.options.forkCommitPages
+        ) break;
       }
     } catch (error) {
       recordFailure(
@@ -650,6 +691,8 @@ async function ingestPullRequestCommits(
     const firstPage = pullRequest.commits;
     context.stats.expected.pullRequestCommitMemberships += firstPage.totalCount || 0;
     await persistAndLink((firstPage.nodes || []).filter((node): node is PullRequestCommitNode => node !== null));
+
+    if (repo.isFork && context.options.forkMode === 'shallow') return;
 
     if (!firstPage.pageInfo.hasNextPage) return;
     if (!firstPage.pageInfo.endCursor) {
@@ -807,6 +850,11 @@ async function ingestPullRequests(
           pullRequestId,
         );
       }
+      if (
+        repo.isFork &&
+        context.options.forkMode === 'shallow' &&
+        page.pageNumber >= context.options.forkPullRequestPages
+      ) break;
     }
   } catch (error) {
     recordFailure(context, { scope: 'pull-requests', repository: repo.nameWithOwner }, error);
@@ -937,6 +985,9 @@ export async function runSynchronousIngestion(request: NextRequest) {
           allBranches: options.allBranches,
           branches: options.branches ? [...options.branches] : null,
           repositoryNames: options.repositoryNames ? [...options.repositoryNames] : null,
+          forkMode: options.forkMode,
+          forkCommitPages: options.forkCommitPages,
+          forkPullRequestPages: options.forkPullRequestPages,
         },
         stats: context.stats,
         failures: context.failures,

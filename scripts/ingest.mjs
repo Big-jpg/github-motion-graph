@@ -13,18 +13,19 @@ for (const file of ['.env.local', '.env']) {
 }
 
 const args = process.argv.slice(2);
-const options = { url: process.env.INGEST_URL || 'https://github-motion-graph.vercel.app/api/ingest', username: process.env.GITHUB_USERNAME || null, visibility: 'public', includeForks: true, allBranches: true, repositories: [], branches: [], affiliations: [], timeout: 7200, wait: true, runId: null };
+const options = { url: process.env.INGEST_URL || 'https://github-motion-graph.vercel.app/api/ingest', username: process.env.GITHUB_USERNAME || null, visibility: 'public', includeForks: true, allBranches: true, forkMode: 'shallow', repositories: [], branches: [], affiliations: [], timeout: 7200, wait: true, runId: null };
 const value = (i, flag) => { if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`${flag} requires a value`); return args[i + 1]; };
 const list = input => input.split(',').map(item => item.trim()).filter(Boolean);
 
 for (let i = 0; i < args.length; i++) {
   const flag = args[i];
   if (flag === '-h' || flag === '--help') {
-    console.log(`GitHub Motion Graph ingestion\n\n  pnpm ingest -- --username Big-jpg\n  pnpm ingest -- --repo owner/name\n  pnpm ingest -- --run <run-id>\n\nOptions:\n  -u, --username <login>\n  -r, --repo <owner/name>       Repeat or comma-separate\n  -b, --branch <name>           Repeat or comma-separate\n  -a, --affiliation <value>\n      --visibility public|private|all\n      --exclude-forks\n      --default-branch-only\n      --url <endpoint>\n      --timeout <seconds>        Overall watch timeout (default 7200)\n      --run <id>                 Resume watching a durable run\n      --no-wait                  Queue and return immediately`);
+    console.log(`GitHub Motion Graph ingestion\n\n  pnpm ingest -- --username Big-jpg\n  pnpm ingest -- --repo owner/name\n  pnpm ingest -- --run <run-id>\n\nOptions:\n  -u, --username <login>\n  -r, --repo <owner/name>       Repeat or comma-separate\n  -b, --branch <name>           Repeat or comma-separate\n  -a, --affiliation <value>\n      --visibility public|private|all\n      --exclude-forks\n      --full-forks               Traverse forks at normal full depth\n      --default-branch-only\n      --url <endpoint>\n      --timeout <seconds>        Overall watch timeout (default 7200)\n      --run <id>                 Resume watching a durable run\n      --no-wait                  Queue and return immediately`);
     process.exit(0);
   }
   if (flag === '--exclude-forks') { options.includeForks = false; continue; }
   if (flag === '--default-branch-only') { options.allBranches = false; continue; }
+  if (flag === '--full-forks') { options.forkMode = 'full'; continue; }
   if (flag === '--no-wait') { options.wait = false; continue; }
   const next = value(i, flag); i++;
   if (['-u', '--username'].includes(flag)) options.username = next;
@@ -53,7 +54,7 @@ async function main() {
   let runId = options.runId;
   let statusUrl;
   if (!runId) {
-    const body = { username: options.username, visibility: options.visibility, includeForks: options.includeForks, allBranches: options.allBranches };
+    const body = { username: options.username, visibility: options.visibility, includeForks: options.includeForks, allBranches: options.allBranches, forkMode: options.forkMode };
     if (options.repositories.length) body.repositoryNames = [...new Set(options.repositories)];
     if (options.branches.length) body.branches = [...new Set(options.branches)];
     if (options.affiliations.length) body.affiliations = [...new Set(options.affiliations)];
@@ -69,6 +70,7 @@ async function main() {
   statusUrl ||= new URL(`${options.url.replace(/\/$/, '')}/${runId}`).toString();
   const deadline = Date.now() + options.timeout * 1000;
   let previous = '';
+  let lastDetailAt = 0;
   while (Date.now() < deadline) {
     const response = await fetch(statusUrl, { headers });
     const run = await json(response);
@@ -76,6 +78,16 @@ async function main() {
     const line = `${run.status} · ${count(run.completed_jobs)}/${count(run.total_jobs)} complete · ${count(run.failed_jobs)} failed`;
     if (line !== previous) console.log(line);
     previous = line;
+    if (Date.now() - lastDetailAt >= 30000) {
+      const pending = (run.jobs || []).filter(job => !['complete', 'failed'].includes(job.status));
+      for (const job of pending) {
+        const name = String(job.dedupe_key || job.kind).replace(/^repository:/, '');
+        const age = job.lease_age_seconds == null ? '?' : `${job.lease_age_seconds}s`;
+        console.log(`  ↳ ${name} · ${job.health || job.status} · attempt ${job.attempts} · lease age ${age}`);
+        if (job.last_error) console.log(`    last error: ${job.last_error}`);
+      }
+      lastDetailAt = Date.now();
+    }
     if (['complete', 'partial', 'failed'].includes(run.status)) {
       for (const job of run.jobs || []) if (job.status === 'failed') console.error(`  ${job.dedupe_key}: ${job.last_error}`);
       if (run.status !== 'complete') throw new Error(`Run ${runId} finished ${run.status}; successful repository work was preserved`);

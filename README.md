@@ -89,6 +89,7 @@ Scope can be narrowed in the request body:
   "repositoryNames": ["Big-jpg/github-motion-graph"],
   "visibility": "public",
   "includeForks": false,
+  "forkMode": "shallow",
   "affiliations": ["OWNER", "COLLABORATOR"],
   "allBranches": false,
   "branches": ["main", "release"]
@@ -101,11 +102,14 @@ Scope can be narrowed in the request body:
 | `repositoryNames` | unset | Optional full `owner/name` allowlist for per-repository backfills and retries |
 | `visibility` | `public` | `public`, `private`, or `all`; GitHub treats internal repositories as private for this filter |
 | `includeForks` | `true` | Set `false` to exclude forks |
+| `forkMode` | `shallow` | Forks ingest only their default branch, two commit pages, one PR page, and embedded PR commits. Use `full` to traverse them normally |
+| `forkCommitPages` | `2` | Commit-history page cap per shallow fork branch (1–100) |
+| `forkPullRequestPages` | `1` | Pull-request page cap per shallow fork (1–100) |
 | `affiliations` | all three | Any non-empty subset of `OWNER`, `COLLABORATOR`, `ORGANIZATION_MEMBER` |
 | `allBranches` | `true` | Set `false` to traverse only the default branch |
 | `branches` | unset | Optional branch-name allowlist; when present it overrides `allBranches` |
 
-`POST /api/ingest` returns HTTP 202 with `runId` and `statusUrl`. `GET /api/ingest/:runId` (with the same ingest secret) reports queued/running/completed/failed jobs and their last errors. Runs finish as `complete` or `partial`; queue deliveries retry up to five times while graph writes remain idempotent.
+`POST /api/ingest` returns HTTP 202 with `runId` and `statusUrl`. `GET /api/ingest/:runId` (with the same ingest secret) reports queued/running/completed/failed jobs, attempt counts, lease age, health (`in-flight`, `waiting-for-retry`, or `stale-lease`), and last errors. Runs finish as `complete` or `partial`; queue deliveries retry up to five times while graph writes remain idempotent. The CLI prints unfinished job details every 30 seconds even when aggregate counts do not change.
 
 The current work unit is one repository. This removes the account-wide five-minute bottleneck. An exceptionally large single repository can later be split into branch/PR cursor jobs without changing the submit or status APIs.
 
