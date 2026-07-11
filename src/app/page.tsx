@@ -69,7 +69,7 @@ export default function Home() {
               Personal development topology
             </p>
             <h1 className="max-w-[10ch] font-display text-[clamp(3.5rem,9vw,7.5rem)] font-medium leading-[0.9] tracking-[-0.055em]">
-              See how your GitHub work connects.
+              Reveal the connections in git.
             </h1>
             <p className="mt-7 max-w-xl text-lg font-semibold leading-8 text-muted-foreground sm:text-xl">
               Explore repositories, branches, commits, pull requests, people, and
