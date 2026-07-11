@@ -264,10 +264,16 @@ function parseOptions(body: unknown): IngestOptions {
     }
     repositoryNames = new Set(
       record.repositoryNames
-        .map((repository) => (repository as string).trim().toLowerCase())
+        .flatMap((repository) => (repository as string).split(/[\s,]+/))
+        .map((repository) => repository.trim().toLowerCase())
         .filter((repository) => repository.length > 0),
     );
     if (repositoryNames.size === 0) throw new Error('repositoryNames cannot be empty');
+    for (const repository of repositoryNames) {
+      if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+        throw new Error(`Invalid repository name: ${repository}. Expected owner/name.`);
+      }
+    }
   }
 
   let affiliations = [...DEFAULT_AFFILIATIONS];

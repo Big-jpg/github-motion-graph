@@ -65,6 +65,9 @@ pnpm ingest
 # Or explicitly safety-check the GitHub account and narrow the run
 pnpm ingest -- --username Big-jpg --repo Big-jpg/github-motion-graph
 
+# Multiple repositories (quoting is portable across PowerShell and Unix shells)
+pnpm ingest -- --repo "Big-jpg/ever-gauzy,Big-jpg/mindsdb"
+
 # Queue without waiting, or resume watching later
 pnpm ingest -- --no-wait
 pnpm ingest -- --run <run-id>

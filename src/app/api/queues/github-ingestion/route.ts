@@ -9,11 +9,13 @@ export const maxDuration = 300;
 
 interface RepositoriesData { viewer: { repositories: GitHubConnection<RepoNode> } }
 
+class PermanentIngestError extends Error {}
+
 async function discover(runId: string, payload: Record<string, unknown>) {
   const viewer = await githubGraphQL<{ viewer: { login: string } }>(VIEWER_QUERY);
   const expected = typeof payload.username === 'string' ? payload.username : null;
   if (expected && expected.toLowerCase() !== viewer.viewer.login.toLowerCase()) {
-    throw new Error(`GH_TOKEN belongs to ${viewer.viewer.login}, not ${expected}`);
+    throw new PermanentIngestError(`GH_TOKEN belongs to ${viewer.viewer.login}, not ${expected}`);
   }
   await updateRunViewer(runId, viewer.viewer.login);
 
@@ -41,7 +43,7 @@ async function discover(runId: string, payload: Record<string, unknown>) {
   }
   if (requested) {
     const missing = [...requested].filter((name) => !matched.has(name));
-    if (missing.length) throw new Error(`Repositories not found in the selected scope: ${missing.join(', ')}`);
+    if (missing.length) throw new PermanentIngestError(`Repositories not found in the selected scope: ${missing.join(', ')}`);
   }
   return { viewer: viewer.viewer.login, repositoriesQueued: matched.size };
 }
@@ -86,7 +88,7 @@ export const POST = handleCallback<IngestMessage>(async (message, metadata) => {
       messageId: metadata.messageId,
     });
   } catch (error) {
-    const terminal = metadata.deliveryCount >= 5;
+    const terminal = error instanceof PermanentIngestError || metadata.deliveryCount >= 5;
     await retryJob(message.jobId, error, terminal);
     console.error('ingestion.job.failed', {
       runId: message.runId,

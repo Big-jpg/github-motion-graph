@@ -15,7 +15,10 @@ for (const file of ['.env.local', '.env']) {
 const args = process.argv.slice(2);
 const options = { url: process.env.INGEST_URL || 'https://github-motion-graph.vercel.app/api/ingest', username: process.env.GITHUB_USERNAME || null, visibility: 'public', includeForks: true, allBranches: true, forkMode: 'shallow', repositories: [], branches: [], affiliations: [], timeout: 7200, wait: true, runId: null };
 const value = (i, flag) => { if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`${flag} requires a value`); return args[i + 1]; };
-const list = input => input.split(',').map(item => item.trim()).filter(Boolean);
+// PowerShell can turn an unquoted comma-separated native argument into a
+// space-separated value. Accept both forms so --repo a/b,c/d behaves the same
+// in PowerShell, cmd, bash, and zsh.
+const list = input => input.split(/[\s,]+/).map(item => item.trim()).filter(Boolean);
 
 for (let i = 0; i < args.length; i++) {
   const flag = args[i];
@@ -41,6 +44,11 @@ for (let i = 0; i < args.length; i++) {
 
 const secret = process.env.INGEST_SECRET;
 if (!secret) throw new Error('INGEST_SECRET is required in the shell, .env.local, or .env');
+for (const repository of options.repositories) {
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+    throw new Error(`Invalid repository name: ${repository}. Expected owner/name.`);
+  }
+}
 const headers = { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' };
 const count = input => Number(input) || 0;
 
