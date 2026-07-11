@@ -10,7 +10,7 @@ import type {
 } from "react-force-graph-2d";
 import type { MutableRefObject, ReactElement } from "react";
 import type { ForceGraphLink, ForceGraphNode, GraphData, GraphEdge, GraphNode } from "@/lib/types";
-import { CONTRIBUTOR_TYPES, DEFAULT_DYNAMICS, NODE_TYPES } from "./GraphControls";
+import { CONTRIBUTOR_TYPES, NODE_TYPES } from "./GraphControls";
 import type { GraphFilters } from "./GraphControls";
 
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
@@ -147,19 +147,10 @@ function contractHiddenCommits(
 
 type SemanticForce = ((alpha: number) => void) & {
   initialize: (nodes: NodeVisual[]) => void;
-  advanceLocomotion: () => void;
 };
 
-function createSemanticForce(locomotion: boolean): SemanticForce {
+function createSemanticForce(): SemanticForce {
   let nodes: NodeVisual[] = [];
-  const orbits = new Map<string, {
-    originX: number;
-    originY: number;
-    phase: number;
-    radius: number;
-    direction: number;
-    spiral: number;
-  }>();
   const force = ((alpha: number) => {
     if (nodes.length === 0) return;
 
@@ -222,39 +213,8 @@ function createSemanticForce(locomotion: boolean): SemanticForce {
       }
     }
 
-    if (locomotion) {
-      for (const node of nodes) {
-        if (node.type !== "user") continue;
-        const orbit = orbits.get(node.id);
-        if (!orbit) continue;
-        const breathingRadius = orbit.radius * (1 + Math.sin(orbit.phase * 0.45) * orbit.spiral);
-        const targetX = orbit.originX + Math.cos(orbit.phase) * breathingRadius;
-        const targetY = orbit.originY + Math.sin(orbit.phase) * breathingRadius * 0.72;
-        const lerpStrength = 0.018 * alpha;
-        node.vx = (node.vx ?? 0) + (targetX - (node.x ?? 0)) * lerpStrength;
-        node.vy = (node.vy ?? 0) + (targetY - (node.y ?? 0)) * lerpStrength;
-      }
-    }
   }) as SemanticForce;
-  force.initialize = nextNodes => {
-    nodes = nextNodes;
-    for (const node of nodes) {
-      if (node.type !== "user" || orbits.has(node.id)) continue;
-      orbits.set(node.id, {
-        originX: node.x ?? 0,
-        originY: node.y ?? 0,
-        phase: Math.random() * Math.PI * 2,
-        radius: 8 + Math.random() * 18,
-        direction: Math.random() > 0.5 ? 1 : -1,
-        spiral: 0.05 + Math.random() * 0.16,
-      });
-    }
-  };
-  force.advanceLocomotion = () => {
-    for (const orbit of orbits.values()) {
-      orbit.phase += (0.08 + orbit.radius * 0.0015) * orbit.direction;
-    }
-  };
+  force.initialize = nextNodes => { nodes = nextNodes; };
   return force;
 }
 
@@ -425,13 +385,7 @@ export default function ForceGraphVisualization({
     return { nodes, links };
   }, [data, filters, lodLevel]);
 
-  const dynamics = filters?.dynamics ?? DEFAULT_DYNAMICS;
-  const semanticForce = useMemo(
-    () => createSemanticForce(
-      dynamics.locomotion && !reduceMotion && lodLevel !== "detail",
-    ),
-    [dynamics.locomotion, lodLevel, reduceMotion],
-  );
+  const semanticForce = useMemo(() => createSemanticForce(), []);
 
   const fitSignature = useMemo(
     () => `${data.nodes.length}:${data.edges.length}:${[...(filters?.nodeTypes ?? [])].join(",")}:${[...(filters?.contributors ?? [])].join(",")}`,
@@ -454,15 +408,6 @@ export default function ForceGraphVisualization({
       graph.d3Force("semantic-dynamics", null as never);
     };
   }, [graphData, semanticForce]);
-
-  useEffect(() => {
-    if (reduceMotion || lodLevel === "detail" || !dynamics.locomotion) return;
-    const timer = window.setInterval(() => {
-      semanticForce.advanceLocomotion();
-      fgRef.current?.d3ReheatSimulation();
-    }, 650);
-    return () => window.clearInterval(timer);
-  }, [dynamics.locomotion, lodLevel, reduceMotion, semanticForce]);
 
   const handleNodeClick = useCallback(
     (node: NodeObject<NodeVisual>) => {

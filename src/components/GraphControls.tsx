@@ -56,21 +56,12 @@ export const CONTRIBUTOR_TYPES = [
   },
 ] as const;
 
-export interface GraphDynamics {
-  locomotion: boolean;
-}
-
-export const DEFAULT_DYNAMICS: GraphDynamics = {
-  locomotion: true,
-};
-
 export interface GraphFilters {
   nodeTypes: Set<string>;
   repos: Set<string>;
   users: Set<string>;
   contributors: Set<string>;
   connections: boolean;
-  dynamics: GraphDynamics;
 }
 
 interface GraphControlsProps {
@@ -94,7 +85,6 @@ export default function GraphControls({
   );
   const [expanded, setExpanded] = useState(false);
   const [connectionsVisible, setConnectionsVisible] = useState(true);
-  const [dynamics, setDynamics] = useState<GraphDynamics>(DEFAULT_DYNAMICS);
 
   const nodeCounts = useMemo(
     () =>
@@ -119,7 +109,6 @@ export default function GraphControls({
     types: Set<string>,
     contributors: Set<string>,
     connections = connectionsVisible,
-    nextDynamics = dynamics,
   ) => {
     onFilterChange({
       nodeTypes: types,
@@ -127,14 +116,7 @@ export default function GraphControls({
       users: new Set(),
       contributors,
       connections,
-      dynamics: nextDynamics,
     });
-  };
-
-  const toggleLocomotion = () => {
-    const next = { locomotion: !dynamics.locomotion };
-    setDynamics(next);
-    emitFilters(activeTypes, activeContributors, connectionsVisible, next);
   };
 
   const toggleConnections = () => {
@@ -171,15 +153,13 @@ export default function GraphControls({
     setActiveTypes(types);
     setActiveContributors(contributors);
     setConnectionsVisible(true);
-    setDynamics(DEFAULT_DYNAMICS);
-    emitFilters(types, contributors, true, DEFAULT_DYNAMICS);
+    emitFilters(types, contributors, true);
   };
 
   const allFiltersActive =
     activeTypes.size === NODE_TYPES.length &&
     activeContributors.size === CONTRIBUTOR_TYPES.length &&
-    connectionsVisible &&
-    dynamics.locomotion === DEFAULT_DYNAMICS.locomotion;
+    connectionsVisible;
 
   return (
     <div
@@ -366,35 +346,6 @@ export default function GraphControls({
             </button>
             <p className="px-3 pt-1.5 text-[0.68rem] font-semibold leading-4 text-muted-foreground">
               Hides the bridges while preserving each island&apos;s shape.
-            </p>
-          </div>
-
-          <div className="mt-3 border-t-2 border-border pt-3">
-            <p className="px-2 pb-2 text-[0.68rem] font-black uppercase tracking-[0.14em] text-muted-foreground">
-              Graph dynamics
-            </p>
-            <button
-              type="button"
-              aria-pressed={dynamics.locomotion}
-              onClick={toggleLocomotion}
-              className={`flex min-h-11 w-full items-center gap-3 rounded-2xl border-2 px-3 text-left transition-colors ${
-                dynamics.locomotion
-                  ? "border-border bg-secondary text-foreground"
-                  : "border-transparent text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M4 12a8 8 0 1 0 3-6.25" />
-                <path d="M4 5v5h5" />
-                <circle cx="12" cy="12" r="2" />
-              </svg>
-              <span className="text-sm font-extrabold">Contributor locomotion</span>
-              <span className="ml-auto font-mono text-[0.7rem] font-semibold text-muted-foreground">
-                {dynamics.locomotion ? "On" : "Off"}
-              </span>
-            </button>
-            <p className="px-3 pt-1.5 text-[0.68rem] font-semibold leading-4 text-muted-foreground">
-              Humans and bots follow small independent orbits. Cohesion and separation remain automatic.
             </p>
           </div>
 
