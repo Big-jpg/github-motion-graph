@@ -57,6 +57,17 @@ pnpm dev
 
 The ingest endpoint backfills every page of repositories, branches, branch histories, pull requests, and pull-request commits available to `GH_TOKEN`. By default it ingests the authenticated viewer's public repositories across owner, collaborator, and organization-member affiliations, includes forks, and traverses every branch.
 
+The recommended on-demand helper loads `INGEST_SECRET`, `INGEST_URL`, and the optional `GITHUB_USERNAME` from `.env.local`:
+
+```bash
+pnpm ingest
+
+# Or explicitly safety-check the GitHub account and narrow the run
+pnpm ingest -- --username Big-jpg --repo Big-jpg/github-motion-graph
+```
+
+Run `pnpm ingest -- --help` for branch, visibility, fork, affiliation, URL, and timeout controls. Direct HTTP invocation remains available for automation:
+
 ```bash
 curl -X POST http://localhost:3000/api/ingest \
   -H "Content-Type: application/json" \

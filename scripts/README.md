@@ -2,6 +2,7 @@
 
 This folder contains helper scripts for development and reproducible operations.
 
+- `ingest.mjs` — recommended cross-platform helper exposed as `pnpm ingest`.
 - `ingest.sh` / `ingest.ps1` — call the `/api/ingest` endpoint with a provided `INGEST_SECRET`.
 - `pull-vercel-env.sh` / `pull-vercel-env.ps1` — pull environment variables from Vercel into a local `.env.local` file for local testing.
 
@@ -12,6 +13,24 @@ Security and workflow guidance
 - When testing against production data locally, ensure you understand data privacy and rate limits.
 
 Examples
+
+Recommended cross-platform helper:
+
+```bash
+# Full public backfill using GITHUB_USERNAME/INGEST_URL from .env.local
+pnpm ingest
+
+# Explicit viewer safety check
+pnpm ingest -- --username Big-jpg
+
+# Faster repository-scoped refresh
+pnpm ingest -- --username Big-jpg --repo Big-jpg/github-motion-graph
+
+# Smaller history scope for a large repository
+pnpm ingest -- --repo Big-jpg/github-motion-graph --default-branch-only
+```
+
+Run `pnpm ingest -- --help` for visibility, fork, affiliation, branch, URL, and timeout options. The helper never accepts the ingest secret as a command-line argument; it reads `INGEST_SECRET` from the shell, `.env.local`, or `.env` so the secret is not exposed in process listings.
 
 Bash:
 
