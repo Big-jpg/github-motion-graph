@@ -9,7 +9,7 @@ import type {
   NodeObject,
 } from "react-force-graph-2d";
 import type { MutableRefObject, ReactElement } from "react";
-import type { ForceGraphLink, ForceGraphNode, GraphData } from "@/lib/types";
+import type { ForceGraphLink, ForceGraphNode, GraphData, GraphEdge, GraphNode } from "@/lib/types";
 import { CONTRIBUTOR_TYPES, NODE_TYPES } from "./GraphControls";
 import type { GraphFilters } from "./GraphControls";
 
@@ -52,6 +52,7 @@ const EDGE_STYLES: Record<string, { color: string; dash?: number[] }> = {
   TARGETS: { color: "#557f9d", dash: [4, 3] },
   FROM: { color: "#735f91" },
   PART_OF: { color: "#789086" },
+  SUMMARY: { color: "#b5c8be" },
 };
 
 const NODE_SIZES: Record<ForceGraphNode["type"], number> = {
@@ -61,6 +62,88 @@ const NODE_SIZES: Record<ForceGraphNode["type"], number> = {
   pullRequest: 8,
   user: 10,
 };
+
+type LodLevel = "overview" | "medium" | "detail";
+const MEDIUM_COMMIT_LIMIT = 1500;
+const SUMMARY_LINK_LIMIT = 4000;
+
+function lodCommitIds(nodes: GraphNode[], level: LodLevel) {
+  if (level === "detail") return null;
+  if (level === "overview") return new Set<string>();
+  return new Set(
+    nodes
+      .filter(node => node.type === "commit")
+      .sort((left, right) => {
+        const leftDate = Date.parse(String(left.metadata.committedAt ?? "")) || 0;
+        const rightDate = Date.parse(String(right.metadata.committedAt ?? "")) || 0;
+        return rightDate - leftDate;
+      })
+      .slice(0, MEDIUM_COMMIT_LIMIT)
+      .map(node => node.id),
+  );
+}
+
+function contractHiddenCommits(
+  edges: GraphEdge[],
+  visibleIds: Set<string>,
+  hiddenCommitIds: Set<string>,
+  nodeTypes: Map<string, GraphNode["type"]>,
+) {
+  const normal: GraphEdge[] = [];
+  const neighbors = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const sourceVisible = visibleIds.has(edge.source);
+    const targetVisible = visibleIds.has(edge.target);
+    if (sourceVisible && targetVisible) {
+      normal.push(edge);
+      continue;
+    }
+    const hiddenId = hiddenCommitIds.has(edge.source)
+      ? edge.source
+      : hiddenCommitIds.has(edge.target)
+        ? edge.target
+        : null;
+    if (!hiddenId) continue;
+    const neighbor = hiddenId === edge.source ? edge.target : edge.source;
+    if (!visibleIds.has(neighbor)) continue;
+    const set = neighbors.get(hiddenId) ?? new Set<string>();
+    set.add(neighbor);
+    neighbors.set(hiddenId, set);
+  }
+
+  const summaries = new Map<string, GraphEdge>();
+  for (const adjacent of neighbors.values()) {
+    const people = [...adjacent].filter(id => nodeTypes.get(id) === "user").slice(0, 4);
+    const structure = [...adjacent]
+      .filter(id => ["branch", "pullRequest", "repository"].includes(nodeTypes.get(id) ?? ""))
+      .slice(0, 8);
+    const pairs: Array<[string, string]> = [];
+    for (const person of people) {
+      for (const anchor of structure) pairs.push([person, anchor]);
+    }
+    if (people.length === 0) {
+      const branches = structure.filter(id => nodeTypes.get(id) === "branch").slice(0, 4);
+      const pullRequests = structure.filter(id => nodeTypes.get(id) === "pullRequest").slice(0, 4);
+      for (const branch of branches) {
+        for (const pullRequest of pullRequests) pairs.push([branch, pullRequest]);
+      }
+    }
+    for (const pair of pairs) {
+        const [source, target] = pair[0] < pair[1]
+          ? pair
+          : [pair[1], pair[0]];
+        const key = `${source}\u0000${target}`;
+        const existing = summaries.get(key);
+        if (existing) existing.weight += 1;
+        else summaries.set(key, { source, target, type: "SUMMARY", weight: 1 });
+    }
+  }
+  const strongest = [...summaries.values()]
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, SUMMARY_LINK_LIMIT)
+    .map(edge => ({ ...edge, weight: Math.min(8, 0.35 + Math.log2(edge.weight + 1)) }));
+  return [...normal, ...strongest];
+}
 
 interface ForceGraphProps {
   data: GraphData;
@@ -146,6 +229,9 @@ export default function ForceGraphVisualization({
     null,
   );
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [lodLevel, setLodLevel] = useState<LodLevel>("overview");
+  const lodTimer = useRef<number | null>(null);
+  const fittedSignature = useRef<string | null>(null);
   const canvasFontFamily = useRef("ui-rounded, system-ui, sans-serif");
 
   useEffect(() => {
@@ -190,12 +276,22 @@ export default function ForceGraphVisualization({
       });
     }
 
-    const nodeIds = new Set(filteredNodes.map(node => node.id));
-    const filteredEdges = data.edges.filter(
-      edge => nodeIds.has(edge.source) && nodeIds.has(edge.target),
+    const allowedCommitIds = lodCommitIds(filteredNodes, lodLevel);
+    const lodNodes = allowedCommitIds === null
+      ? filteredNodes
+      : filteredNodes.filter(node => node.type !== "commit" || allowedCommitIds.has(node.id));
+    const nodeIds = new Set(lodNodes.map(node => node.id));
+    const nodeTypes = new Map(lodNodes.map(node => [node.id, node.type]));
+    const hiddenCommitIds = new Set(
+      filteredNodes
+        .filter(node => node.type === "commit" && !nodeIds.has(node.id))
+        .map(node => node.id),
     );
+    const filteredEdges = hiddenCommitIds.size > 0
+      ? contractHiddenCommits(data.edges, nodeIds, hiddenCommitIds, nodeTypes)
+      : data.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target));
 
-    const nodes: NodeVisual[] = filteredNodes.map(node => {
+    const nodes: NodeVisual[] = lodNodes.map(node => {
       const isBot =
         node.type === "user" &&
         (node.metadata.isBot === true || node.contributorType === "bot");
@@ -214,7 +310,12 @@ export default function ForceGraphVisualization({
     }));
 
     return { nodes, links };
-  }, [data, filters]);
+  }, [data, filters, lodLevel]);
+
+  const fitSignature = useMemo(
+    () => `${data.nodes.length}:${data.edges.length}:${[...(filters?.nodeTypes ?? [])].join(",")}:${[...(filters?.contributors ?? [])].join(",")}`,
+    [data, filters?.contributors, filters?.nodeTypes],
+  );
 
   useEffect(() => {
     onVisibleCountChange?.(
@@ -359,6 +460,8 @@ export default function ForceGraphVisualization({
 
   useEffect(() => {
     if (!fgRef.current || graphData.nodes.length === 0) return;
+    if (fittedSignature.current === fitSignature) return;
+    fittedSignature.current = fitSignature;
 
     const timer = window.setTimeout(
       () => {
@@ -367,7 +470,19 @@ export default function ForceGraphVisualization({
       reduceMotion ? 0 : 450,
     );
     return () => window.clearTimeout(timer);
-  }, [graphData, reduceMotion]);
+  }, [fitSignature, graphData, reduceMotion]);
+
+  useEffect(() => () => {
+    if (lodTimer.current !== null) window.clearTimeout(lodTimer.current);
+  }, []);
+
+  const handleZoom = useCallback(({ k }: { k: number }) => {
+    if (lodTimer.current !== null) window.clearTimeout(lodTimer.current);
+    lodTimer.current = window.setTimeout(() => {
+      const next: LodLevel = k >= 4 ? "detail" : k >= 1.4 ? "medium" : "overview";
+      setLodLevel(current => current === next ? current : next);
+    }, 140);
+  }, []);
 
   return (
     <section
@@ -396,6 +511,7 @@ export default function ForceGraphVisualization({
         }}
         linkCanvasObject={paintLink}
         linkVisibility={filters?.connections !== false}
+        onZoom={handleZoom}
         onNodeClick={handleNodeClick}
         onNodeHover={node => setHoveredNode(node as NodeObject<NodeVisual> | null)}
         onBackgroundClick={() => onBackgroundClick?.()}
@@ -408,6 +524,14 @@ export default function ForceGraphVisualization({
         enableZoomInteraction
         enablePanInteraction
       />
+
+      <div className="pastel-control pointer-events-none absolute top-4 right-4 z-10 min-h-9 px-3 text-xs font-extrabold sm:top-auto sm:right-4 sm:bottom-4">
+        {lodLevel === "overview"
+          ? "Overview · commits summarized"
+          : lodLevel === "medium"
+            ? `Mid detail · newest ${MEDIUM_COMMIT_LIMIT.toLocaleString()} commits`
+            : "Full commit detail"}
+      </div>
 
       {hoveredNode && !selectedNodeId && (
         <aside className="pastel-panel pointer-events-none absolute inset-x-3 top-20 z-20 max-h-[45svh] overflow-hidden p-4 sm:inset-x-auto sm:top-4 sm:right-4 sm:w-80">
