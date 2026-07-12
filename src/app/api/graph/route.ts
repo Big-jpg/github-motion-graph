@@ -74,13 +74,14 @@ export async function GET(request: NextRequest) {
         is_fork,
         is_private
       FROM repositories
+      WHERE COALESCE(is_fork, FALSE) = FALSE
     `;
 
     let repos;
     if (repoFilter) {
       const fullNameMatches = await sql`
         ${repositoryColumns}
-        WHERE LOWER(full_name) = LOWER(${repoFilter})
+        AND LOWER(full_name) = LOWER(${repoFilter})
         ORDER BY pushed_at DESC NULLS LAST
       `;
 
@@ -89,7 +90,7 @@ export async function GET(request: NextRequest) {
       } else {
         const nameMatches = await sql`
           ${repositoryColumns}
-          WHERE LOWER(name) = LOWER(${repoFilter})
+          AND LOWER(name) = LOWER(${repoFilter})
           ORDER BY pushed_at DESC NULLS LAST
         `;
 
