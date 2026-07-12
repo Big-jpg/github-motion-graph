@@ -21,8 +21,6 @@ type NodeVisual = ForceGraphNode & {
   color: string;
   strokeColor: string;
   size: number;
-  fx?: number;
-  fy?: number;
 };
 
 type LinkVisual = Omit<ForceGraphLink, "source" | "target"> & {
@@ -65,41 +63,7 @@ const NODE_SIZES: Record<ForceGraphNode["type"], number> = {
   user: 10,
 };
 
-const MEDIUM_COMMIT_LIMIT = 1500;
 const SUMMARY_LINK_LIMIT = 4000;
-
-function focusedCommitIds(
-  nodes: GraphNode[],
-  focusedNodeIds: Set<string> | null,
-  adjacency: Map<string, string[]>,
-) {
-  if (!focusedNodeIds) return new Set<string>();
-  return new Set(
-    nodes
-      .filter(node => {
-        if (node.type !== "commit") return false;
-        const neighbors = adjacency.get(node.id) ?? [];
-        if (neighbors.some(id => focusedNodeIds.has(id))) return true;
-        return neighbors.some(id =>
-          (adjacency.get(id) ?? []).some(secondHop => focusedNodeIds.has(secondHop)),
-        );
-      })
-      .sort((left, right) => {
-        const leftDate = Date.parse(String(left.metadata.committedAt ?? "")) || 0;
-        const rightDate = Date.parse(String(right.metadata.committedAt ?? "")) || 0;
-        return rightDate - leftDate;
-      })
-      .slice(0, MEDIUM_COMMIT_LIMIT)
-      .map(node => node.id),
-  );
-}
-
-interface NodePosition {
-  x: number;
-  y: number;
-  vx?: number;
-  vy?: number;
-}
 
 interface SelectionRect {
   startX: number;
@@ -108,28 +72,6 @@ interface SelectionRect {
   endY: number;
 }
 
-function positionForNode(
-  nodeId: string,
-  snapshot: Map<string, NodePosition>,
-  adjacency: Map<string, string[]>,
-): NodePosition | undefined {
-  const existing = snapshot.get(nodeId);
-  if (existing) return existing;
-  const neighbors: NodePosition[] = [];
-  for (const neighborId of adjacency.get(nodeId) ?? []) {
-    const position = snapshot.get(neighborId);
-    if (position) neighbors.push(position);
-    if (neighbors.length >= 6) break;
-  }
-  if (neighbors.length === 0) return undefined;
-  const hash = [...nodeId].reduce((total, character) => total + character.charCodeAt(0), 0);
-  return {
-    x: neighbors.reduce((total, position) => total + position.x, 0) / neighbors.length + (hash % 13) - 6,
-    y: neighbors.reduce((total, position) => total + position.y, 0) / neighbors.length + (hash % 17) - 8,
-    vx: 0,
-    vy: 0,
-  };
-}
 
 function contractHiddenCommits(
   edges: GraphEdge[],
@@ -266,28 +208,6 @@ function createSemanticForce(): SemanticForce {
   return force;
 }
 
-function releaseNodeConstraints(nodes: NodeVisual[]) {
-  for (const node of nodes) {
-    node.fx = undefined;
-    node.fy = undefined;
-  }
-}
-
-function translateAndPinNodes(
-  nodes: NodeVisual[],
-  selectedIds: Set<string>,
-  dx: number,
-  dy: number,
-) {
-  for (const node of nodes) {
-    if (!selectedIds.has(node.id) || node.x == null || node.y == null) continue;
-    node.x += dx;
-    node.y += dy;
-    node.fx = node.x;
-    node.fy = node.y;
-  }
-}
-
 interface ForceGraphProps {
   data: GraphData;
   width: number;
@@ -374,12 +294,7 @@ export default function ForceGraphVisualization({
   const [reduceMotion, setReduceMotion] = useState(false);
   const [areaSelectionActive, setAreaSelectionActive] = useState(false);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
-  const [focusedNodeIds, setFocusedNodeIds] = useState<Set<string> | null>(null);
-  const [layoutSnapshot, setLayoutSnapshot] = useState<Map<string, NodePosition>>(
-    () => new Map(),
-  );
   const fittedSignature = useRef<string | null>(null);
-  const hadFocus = useRef(false);
   const graphDataRef = useRef<{ nodes: NodeVisual[]; links: LinkObject<NodeVisual, LinkVisual>[] } | null>(null);
   const canvasFontFamily = useRef("ui-rounded, system-ui, sans-serif");
 
@@ -394,19 +309,6 @@ export default function ForceGraphVisualization({
     query.addEventListener("change", updatePreference);
     return () => query.removeEventListener("change", updatePreference);
   }, []);
-
-  const adjacency = useMemo(() => {
-    const index = new Map<string, string[]>();
-    for (const edge of data.edges) {
-      const sourceNeighbors = index.get(edge.source) ?? [];
-      sourceNeighbors.push(edge.target);
-      index.set(edge.source, sourceNeighbors);
-      const targetNeighbors = index.get(edge.target) ?? [];
-      targetNeighbors.push(edge.source);
-      index.set(edge.target, targetNeighbors);
-    }
-    return index;
-  }, [data.edges]);
 
   const graphData = useMemo(() => {
     let filteredNodes = data.nodes;
@@ -438,10 +340,7 @@ export default function ForceGraphVisualization({
       });
     }
 
-    const allowedCommitIds = focusedCommitIds(filteredNodes, focusedNodeIds, adjacency);
-    const lodNodes = filteredNodes.filter(
-      node => node.type !== "commit" || allowedCommitIds.has(node.id),
-    );
+    const lodNodes = filteredNodes.filter(node => node.type !== "commit");
     const nodeIds = new Set(lodNodes.map(node => node.id));
     const nodeTypes = new Map(lodNodes.map(node => [node.id, node.type]));
     const hiddenCommitIds = new Set(
@@ -458,13 +357,11 @@ export default function ForceGraphVisualization({
         node.type === "user" &&
         (node.metadata.isBot === true || node.contributorType === "bot");
       const style = isBot ? BOT_STYLE : NODE_STYLES[node.type];
-      const position = positionForNode(node.id, layoutSnapshot, adjacency);
       return {
         ...node,
         color: style.fill,
         strokeColor: style.stroke,
         size: NODE_SIZES[node.type],
-        ...position,
       };
     });
 
@@ -474,7 +371,7 @@ export default function ForceGraphVisualization({
     }));
 
     return { nodes, links };
-  }, [adjacency, data, filters, focusedNodeIds, layoutSnapshot]);
+  }, [data, filters]);
 
   useEffect(() => {
     graphDataRef.current = graphData;
@@ -652,47 +549,6 @@ export default function ForceGraphVisualization({
     return () => window.clearTimeout(timer);
   }, [fitSignature, graphData, reduceMotion]);
 
-  const snapshotLayout = useCallback(() => {
-    const snapshot = new Map<string, NodePosition>();
-    for (const node of graphDataRef.current?.nodes ?? []) {
-      if (node.x == null || node.y == null) continue;
-      snapshot.set(node.id, { x: node.x, y: node.y, vx: node.vx, vy: node.vy });
-    }
-    return snapshot;
-  }, []);
-
-  const clearFocus = useCallback(() => {
-    releaseNodeConstraints(graphDataRef.current?.nodes ?? []);
-    setLayoutSnapshot(snapshotLayout());
-    setFocusedNodeIds(null);
-    setAreaSelectionActive(false);
-    setSelectionRect(null);
-    onBackgroundClick?.();
-  }, [onBackgroundClick, snapshotLayout]);
-
-  useEffect(() => {
-    if (!fgRef.current) return;
-    if (focusedNodeIds && focusedNodeIds.size > 0) {
-      hadFocus.current = true;
-      const timer = window.setTimeout(() => {
-        fgRef.current?.zoomToFit(
-          reduceMotion ? 0 : 450,
-          96,
-          node => focusedNodeIds.has(node.id),
-        );
-      }, 120);
-      return () => window.clearTimeout(timer);
-    }
-    if (hadFocus.current) {
-      hadFocus.current = false;
-      const timer = window.setTimeout(
-        () => fgRef.current?.zoomToFit(reduceMotion ? 0 : 450, 64),
-        120,
-      );
-      return () => window.clearTimeout(timer);
-    }
-  }, [focusedNodeIds, graphData, reduceMotion]);
-
   const finishAreaSelection = useCallback((rect: SelectionRect) => {
     const graph = fgRef.current;
     if (!graph) return;
@@ -715,9 +571,12 @@ export default function ForceGraphVisualization({
     setSelectionRect(null);
     setAreaSelectionActive(false);
     if (selected.size === 0) return;
-    setLayoutSnapshot(snapshotLayout());
-    setFocusedNodeIds(selected);
-  }, [snapshotLayout]);
+    graph.zoomToFit(
+      reduceMotion ? 0 : 450,
+      96,
+      node => selected.has(node.id),
+    );
+  }, [reduceMotion]);
 
   const selectionPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -746,22 +605,6 @@ export default function ForceGraphVisualization({
       endY: event.clientY - bounds.top,
     });
   };
-
-  const groupDragOrigin = useRef<{ x: number; y: number } | null>(null);
-  const groupPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    groupDragOrigin.current = { x: event.clientX, y: event.clientY };
-  };
-  const groupPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!groupDragOrigin.current || !focusedNodeIds || !fgRef.current) return;
-    const scale = fgRef.current.zoom() || 1;
-    const dx = (event.clientX - groupDragOrigin.current.x) / scale;
-    const dy = (event.clientY - groupDragOrigin.current.y) / scale;
-    groupDragOrigin.current = { x: event.clientX, y: event.clientY };
-    translateAndPinNodes(graphDataRef.current?.nodes ?? [], focusedNodeIds, dx, dy);
-    fgRef.current.d3ReheatSimulation();
-  };
-  const groupPointerUp = () => { groupDragOrigin.current = null; };
 
   return (
     <section
@@ -792,7 +635,7 @@ export default function ForceGraphVisualization({
         linkVisibility={filters?.connections !== false}
         onNodeClick={handleNodeClick}
         onNodeHover={node => setHoveredNode(node as NodeObject<NodeVisual> | null)}
-        onBackgroundClick={focusedNodeIds ? clearFocus : () => onBackgroundClick?.()}
+        onBackgroundClick={() => onBackgroundClick?.()}
         showPointerCursor
         d3AlphaDecay={0.025}
         d3VelocityDecay={0.34}
@@ -804,24 +647,16 @@ export default function ForceGraphVisualization({
       />
 
       <div className="absolute top-4 right-4 z-30 flex items-center gap-2 sm:top-auto sm:right-4 sm:bottom-4">
-        {focusedNodeIds ? (
-          <button type="button" onClick={clearFocus} className="pastel-control min-h-9 px-3 text-xs font-extrabold">
-            Clear focus · {focusedNodeIds.size} selected
-          </button>
-        ) : (
-          <button
-            type="button"
-            aria-pressed={areaSelectionActive}
-            onClick={() => setAreaSelectionActive(active => !active)}
-            className={`pastel-control min-h-9 px-3 text-xs font-extrabold ${areaSelectionActive ? "pastel-primary" : ""}`}
-          >
-            {areaSelectionActive ? "Drag a focus box" : "Select an area"}
-          </button>
-        )}
+        <button
+          type="button"
+          aria-pressed={areaSelectionActive}
+          onClick={() => setAreaSelectionActive(active => !active)}
+          className={`pastel-control min-h-9 px-3 text-xs font-extrabold ${areaSelectionActive ? "pastel-primary" : ""}`}
+        >
+          {areaSelectionActive ? "Drag a zoom box" : "Zoom to area"}
+        </button>
         <div className="pastel-control pointer-events-none min-h-9 px-3 text-xs font-extrabold">
-          {focusedNodeIds
-            ? `Focused detail · up to ${MEDIUM_COMMIT_LIMIT.toLocaleString()} commits`
-            : "Overview · commits summarized"}
+          Overview · commits summarized
         </div>
       </div>
 
@@ -845,23 +680,6 @@ export default function ForceGraphVisualization({
             />
           )}
         </div>
-      )}
-
-      {focusedNodeIds && (
-        <button
-          type="button"
-          aria-label="Move focused nodes"
-          title="Drag to move and pin the focused nodes"
-          onPointerDown={groupPointerDown}
-          onPointerMove={groupPointerMove}
-          onPointerUp={groupPointerUp}
-          onPointerCancel={groupPointerUp}
-          className="pastel-control absolute top-1/2 left-1/2 z-20 size-11 -translate-x-1/2 -translate-y-1/2 cursor-move p-0 text-[#3d7f70]"
-        >
-          <svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2v20M2 12h20M12 2l-3 3m3-3 3 3M22 12l-3-3m3 3-3 3M12 22l3-3m-3 3-3-3M2 12l3 3m-3-3 3-3" />
-          </svg>
-        </button>
       )}
 
       {hoveredNode && !selectedNodeId && (
