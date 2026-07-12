@@ -63,12 +63,11 @@ const NODE_SIZES: Record<ForceGraphNode["type"], number> = {
   user: 10,
 };
 
-type LodLevel = "overview" | "medium" | "detail";
+type LodLevel = "overview" | "medium";
 const MEDIUM_COMMIT_LIMIT = 1500;
 const SUMMARY_LINK_LIMIT = 4000;
 
 function lodCommitIds(nodes: GraphNode[], level: LodLevel) {
-  if (level === "detail") return null;
   if (level === "overview") return new Set<string>();
   return new Set(
     nodes
@@ -81,6 +80,36 @@ function lodCommitIds(nodes: GraphNode[], level: LodLevel) {
       .slice(0, MEDIUM_COMMIT_LIMIT)
       .map(node => node.id),
   );
+}
+
+interface NodePosition {
+  x: number;
+  y: number;
+  vx?: number;
+  vy?: number;
+}
+
+function positionForNode(
+  nodeId: string,
+  snapshot: Map<string, NodePosition>,
+  adjacency: Map<string, string[]>,
+): NodePosition | undefined {
+  const existing = snapshot.get(nodeId);
+  if (existing) return existing;
+  const neighbors: NodePosition[] = [];
+  for (const neighborId of adjacency.get(nodeId) ?? []) {
+    const position = snapshot.get(neighborId);
+    if (position) neighbors.push(position);
+    if (neighbors.length >= 6) break;
+  }
+  if (neighbors.length === 0) return undefined;
+  const hash = [...nodeId].reduce((total, character) => total + character.charCodeAt(0), 0);
+  return {
+    x: neighbors.reduce((total, position) => total + position.x, 0) / neighbors.length + (hash % 13) - 6,
+    y: neighbors.reduce((total, position) => total + position.y, 0) / neighbors.length + (hash % 17) - 8,
+    vx: 0,
+    vy: 0,
+  };
 }
 
 function contractHiddenCommits(
@@ -303,8 +332,12 @@ export default function ForceGraphVisualization({
   );
   const [reduceMotion, setReduceMotion] = useState(false);
   const [lodLevel, setLodLevel] = useState<LodLevel>("overview");
+  const [layoutSnapshot, setLayoutSnapshot] = useState<Map<string, NodePosition>>(
+    () => new Map(),
+  );
   const lodTimer = useRef<number | null>(null);
   const fittedSignature = useRef<string | null>(null);
+  const graphDataRef = useRef<{ nodes: NodeVisual[]; links: LinkObject<NodeVisual, LinkVisual>[] } | null>(null);
   const canvasFontFamily = useRef("ui-rounded, system-ui, sans-serif");
 
   useEffect(() => {
@@ -318,6 +351,19 @@ export default function ForceGraphVisualization({
     query.addEventListener("change", updatePreference);
     return () => query.removeEventListener("change", updatePreference);
   }, []);
+
+  const adjacency = useMemo(() => {
+    const index = new Map<string, string[]>();
+    for (const edge of data.edges) {
+      const sourceNeighbors = index.get(edge.source) ?? [];
+      sourceNeighbors.push(edge.target);
+      index.set(edge.source, sourceNeighbors);
+      const targetNeighbors = index.get(edge.target) ?? [];
+      targetNeighbors.push(edge.source);
+      index.set(edge.target, targetNeighbors);
+    }
+    return index;
+  }, [data.edges]);
 
   const graphData = useMemo(() => {
     let filteredNodes = data.nodes;
@@ -369,11 +415,13 @@ export default function ForceGraphVisualization({
         node.type === "user" &&
         (node.metadata.isBot === true || node.contributorType === "bot");
       const style = isBot ? BOT_STYLE : NODE_STYLES[node.type];
+      const position = positionForNode(node.id, layoutSnapshot, adjacency);
       return {
         ...node,
         color: style.fill,
         strokeColor: style.stroke,
         size: NODE_SIZES[node.type],
+        ...position,
       };
     });
 
@@ -383,7 +431,11 @@ export default function ForceGraphVisualization({
     }));
 
     return { nodes, links };
-  }, [data, filters, lodLevel]);
+  }, [adjacency, data, filters, layoutSnapshot, lodLevel]);
+
+  useEffect(() => {
+    graphDataRef.current = graphData;
+  }, [graphData]);
 
   const semanticForce = useMemo(() => createSemanticForce(), []);
 
@@ -564,10 +616,21 @@ export default function ForceGraphVisualization({
   const handleZoom = useCallback(({ k }: { k: number }) => {
     if (lodTimer.current !== null) window.clearTimeout(lodTimer.current);
     lodTimer.current = window.setTimeout(() => {
-      const next: LodLevel = k >= 4 ? "detail" : k >= 1.4 ? "medium" : "overview";
-      setLodLevel(current => current === next ? current : next);
+      const next: LodLevel = k >= 1.55
+        ? "medium"
+        : k <= 1.15
+          ? "overview"
+          : lodLevel;
+      if (next === lodLevel) return;
+      const snapshot = new Map<string, NodePosition>();
+      for (const node of graphDataRef.current?.nodes ?? []) {
+        if (node.x == null || node.y == null) continue;
+        snapshot.set(node.id, { x: node.x, y: node.y, vx: node.vx, vy: node.vy });
+      }
+      setLayoutSnapshot(snapshot);
+      setLodLevel(next);
     }, 140);
-  }, []);
+  }, [lodLevel]);
 
   return (
     <section
@@ -613,9 +676,7 @@ export default function ForceGraphVisualization({
       <div className="pastel-control pointer-events-none absolute top-4 right-4 z-10 min-h-9 px-3 text-xs font-extrabold sm:top-auto sm:right-4 sm:bottom-4">
         {lodLevel === "overview"
           ? "Overview · commits summarized"
-          : lodLevel === "medium"
-            ? `Mid detail · newest ${MEDIUM_COMMIT_LIMIT.toLocaleString()} commits`
-            : "Full commit detail"}
+          : `Mid detail · newest ${MEDIUM_COMMIT_LIMIT.toLocaleString()} commits`}
       </div>
 
       {hoveredNode && !selectedNodeId && (
